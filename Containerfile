@@ -18,4 +18,4 @@ COPY --from=builder /app/target/release/metasearch /usr/local/bin/metasearch
 ARG CONFIG
 ENV CONFIG=${CONFIG}
 EXPOSE 28019
-ENTRYPOINT /usr/local/bin/metasearch $CONFIG
+ENTRYPOINT ["sh", "-c", "/usr/local/bin/metasearch $CONFIG"]
