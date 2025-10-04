@@ -1,9 +1,19 @@
 use reqwest::Url;
+use scraper::Selector;
+use std::sync::LazyLock;
 
 use crate::{
     engines::{EngineResponse, RequestResponse, CLIENT},
     parse::{parse_html_response_with_opts, ParseOpts},
 };
+
+static RESULT_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("div.grid.w-full.grid-cols-1.space-y-10.place-self-start > div > div.flex.min-w-0.grow.flex-col").unwrap()
+});
+static TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[title]").unwrap());
+static HREF_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[href]").unwrap());
+static DESCRIPTION_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("#snippet-text").unwrap());
 
 pub fn request(query: &str) -> RequestResponse {
     CLIENT
@@ -28,9 +38,9 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
     parse_html_response_with_opts(
         body,
         ParseOpts::new()
-            .result("div.grid.w-full.grid-cols-1.space-y-10.place-self-start > div > div.flex.min-w-0.grow.flex-col")
-            .title("a[title]")
-            .href("a[href]")
-            .description("#snippet-text"),
+            .result(RESULT_SELECTOR.clone())
+            .title(TITLE_SELECTOR.clone())
+            .href(HREF_SELECTOR.clone())
+            .description(DESCRIPTION_SELECTOR.clone()),
     )
 }

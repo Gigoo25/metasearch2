@@ -1,11 +1,20 @@
 use reqwest::Url;
+use scraper::Selector;
 use serde::Deserialize;
+use std::sync::LazyLock;
 use tracing::error;
 
 use crate::{
     engines::{Engine, EngineResponse, RequestResponse, SearchQuery, CLIENT},
     parse::{parse_html_response_with_opts, ParseOpts},
 };
+
+static RESULT_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("section.search-result").unwrap());
+static TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("h2").unwrap());
+static HREF_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[href]").unwrap());
+static DESCRIPTION_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("p.description").unwrap());
 
 #[derive(Deserialize)]
 pub struct MarginaliaConfig {
@@ -55,9 +64,9 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
     parse_html_response_with_opts(
         body,
         ParseOpts::new()
-            .result("section.search-result")
-            .title("h2")
-            .href("a[href]")
-            .description("p.description"),
+            .result(RESULT_SELECTOR.clone())
+            .title(TITLE_SELECTOR.clone())
+            .href(HREF_SELECTOR.clone())
+            .description(DESCRIPTION_SELECTOR.clone()),
     )
 }

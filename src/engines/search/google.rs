@@ -15,6 +15,34 @@ use crate::{
     parse::{parse_html_response_with_opts, ParseOpts, QueryMethod},
 };
 
+static RESULT_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("[jscontroller=SC7lYd]").unwrap());
+static TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("h3").unwrap());
+static HREF_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[href]").unwrap());
+static DESCRIPTION_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("div[data-sncf='2'], div[data-sncf='1,2'], div[style='-webkit-line-clamp:2']")
+        .unwrap()
+});
+static FEATURED_SNIPPET_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("block-component").unwrap());
+static HEADING_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("div[role='heading']").unwrap());
+static DESC_CONTAINER_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("div[data-attrid='wa:/description'] > span:first-child").unwrap()
+});
+static UL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("ul").unwrap());
+static LI_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("li").unwrap());
+static FS_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(".g > div[lang] a h3, div[lang] > div[style='position:relative'] a h3").unwrap()
+});
+static FS_HREF_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(
+        ".g > div[lang] a:has(h3), div[lang] > div[style='position:relative'] a:has(h3)",
+    )
+    .unwrap()
+});
+static SCRIPT_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("script").unwrap());
+
 pub fn request(query: &str) -> reqwest::RequestBuilder {
     let url = Url::parse_with_params(
         "https://www.google.com/search",
@@ -74,36 +102,25 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
             // xpd is weird, some results have it but it's usually used for ads?
             // the :first-child filters out the ads though since for ads the first child is always a
             // span
-            .result("[jscontroller=SC7lYd]")
-            .title("h3")
-            .href("a[href]")
-            .description(
-                "div[data-sncf='2'], div[data-sncf='1,2'], div[style='-webkit-line-clamp:2']",
-            )
-            .featured_snippet("block-component")
+            .result(RESULT_SELECTOR.clone())
+            .title(TITLE_SELECTOR.clone())
+            .href(HREF_SELECTOR.clone())
+            .description(DESCRIPTION_SELECTOR.clone())
+            .featured_snippet(FEATURED_SNIPPET_SELECTOR.clone())
             .featured_snippet_description(QueryMethod::Manual(Box::new(|el: &ElementRef| {
                 let mut description = String::new();
 
                 // role="heading"
-                if let Some(heading_el) = el
-                    .select(&Selector::parse("div[role='heading']").unwrap())
-                    .next()
-                {
+                if let Some(heading_el) = el.select(&HEADING_SELECTOR).next() {
                     description.push_str(&format!("{}\n\n", heading_el.text().collect::<String>()));
                 }
 
-                if let Some(description_container_el) = el
-                    .select(&Selector::parse("div[data-attrid='wa:/description'] > span:first-child").unwrap())
-                    .next()
-                {
-                    description.push_str(&iter_featured_snippet_children(&description_container_el));
-                }
-                else if let Some(description_list_el) = el
-                    .select(&Selector::parse("ul").unwrap())
-                    .next()
-                {
+                if let Some(description_container_el) = el.select(&DESC_CONTAINER_SELECTOR).next() {
+                    description
+                        .push_str(&iter_featured_snippet_children(&description_container_el));
+                } else if let Some(description_list_el) = el.select(&UL_SELECTOR).next() {
                     // render as bullet points
-                    for li in description_list_el.select(&Selector::parse("li").unwrap()) {
+                    for li in description_list_el.select(&LI_SELECTOR) {
                         let text = li.text().collect::<String>();
                         description.push_str(&format!("• {text}\n"));
                     }
@@ -111,10 +128,10 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
 
                 Ok(description)
             })))
-            .featured_snippet_title(".g > div[lang] a h3, div[lang] > div[style='position:relative'] a h3")
+            .featured_snippet_title(FS_TITLE_SELECTOR.clone())
             .featured_snippet_href(QueryMethod::Manual(Box::new(|el: &ElementRef| {
                 let url = el
-                    .select(&Selector::parse(".g > div[lang] a:has(h3), div[lang] > div[style='position:relative'] a:has(h3)").unwrap())
+                    .select(&FS_HREF_SELECTOR)
                     .next()
                     .and_then(|n| n.value().attr("href"))
                     .unwrap_or_default();
@@ -202,7 +219,7 @@ pub fn parse_images_response(body: &str) -> eyre::Result<EngineImagesResponse> {
         regex::Regex::new(r#"(?:\(function\(\)\{google\.jl=\{.+?)var \w=(\{".+?\});"#)?;
     let mut internal_json = None;
     let dom = scraper::Html::parse_document(body);
-    for script in dom.select(&Selector::parse("script").unwrap()) {
+    for script in dom.select(&SCRIPT_SELECTOR) {
         let script = script.inner_html();
         if let Some(captures) = internal_json_regex.captures(&script).and_then(|c| c.get(1)) {
             internal_json = Some(captures.as_str().to_string());

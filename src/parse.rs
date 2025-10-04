@@ -8,17 +8,31 @@ use crate::{
 use scraper::{Html, Selector};
 use tracing::trace;
 
-#[derive(Default)]
 pub struct ParseOpts {
-    result: &'static str,
+    result: Option<Selector>,
     title: QueryMethod,
     href: QueryMethod,
     description: QueryMethod,
 
-    featured_snippet: &'static str,
+    featured_snippet: Option<Selector>,
     featured_snippet_title: QueryMethod,
     featured_snippet_href: QueryMethod,
     featured_snippet_description: QueryMethod,
+}
+
+impl Default for ParseOpts {
+    fn default() -> Self {
+        Self {
+            result: None,
+            title: QueryMethod::default(),
+            href: QueryMethod::default(),
+            description: QueryMethod::default(),
+            featured_snippet: None,
+            featured_snippet_title: QueryMethod::default(),
+            featured_snippet_href: QueryMethod::default(),
+            featured_snippet_description: QueryMethod::default(),
+        }
+    }
 }
 
 impl ParseOpts {
@@ -28,8 +42,8 @@ impl ParseOpts {
     }
 
     #[must_use]
-    pub fn result(mut self, result: &'static str) -> Self {
-        self.result = result;
+    pub fn result(mut self, result: Selector) -> Self {
+        self.result = Some(result);
         self
     }
 
@@ -52,8 +66,8 @@ impl ParseOpts {
     }
 
     #[must_use]
-    pub fn featured_snippet(mut self, featured_snippet: &'static str) -> Self {
-        self.featured_snippet = featured_snippet;
+    pub fn featured_snippet(mut self, featured_snippet: Selector) -> Self {
+        self.featured_snippet = Some(featured_snippet);
         self
     }
 
@@ -88,12 +102,18 @@ type ManualQueryMethod = Box<dyn Fn(&scraper::ElementRef) -> eyre::Result<String
 pub enum QueryMethod {
     #[default]
     None,
-    CssSelector(&'static str),
+    CssSelector(Selector),
     Manual(ManualQueryMethod),
 }
 
 impl From<&'static str> for QueryMethod {
     fn from(s: &'static str) -> Self {
+        QueryMethod::CssSelector(Selector::parse(s).unwrap())
+    }
+}
+
+impl From<Selector> for QueryMethod {
+    fn from(s: Selector) -> Self {
         QueryMethod::CssSelector(s)
     }
 }
@@ -102,20 +122,18 @@ impl QueryMethod {
     pub fn call_with_css_selector_override(
         &self,
         el: &scraper::ElementRef,
-        with_css_selector: impl Fn(&scraper::ElementRef, &'static str) -> Option<String>,
+        with_css_selector: impl Fn(&scraper::ElementRef, &Selector) -> Option<String>,
     ) -> eyre::Result<String> {
         match self {
             QueryMethod::None => Ok(String::new()),
-            QueryMethod::CssSelector(s) => Ok(with_css_selector(el, s).unwrap_or_default()),
+            QueryMethod::CssSelector(ref sel) => Ok(with_css_selector(el, sel).unwrap_or_default()),
             QueryMethod::Manual(f) => f(el),
         }
     }
 
     pub fn call(&self, el: &scraper::ElementRef) -> eyre::Result<String> {
-        self.call_with_css_selector_override(el, |el, s| {
-            el.select(&Selector::parse(s).unwrap())
-                .next()
-                .map(|n| n.text().collect::<String>())
+        self.call_with_css_selector_override(el, |el, sel| {
+            el.select(sel).next().map(|n| n.text().collect::<String>())
         })
     }
 }
@@ -129,7 +147,7 @@ pub(super) fn parse_html_response_with_opts(
     let mut search_results = Vec::new();
 
     let ParseOpts {
-        result: result_item_query,
+        result,
         title: title_query_method,
         href: href_query_method,
         description: description_query_method,
@@ -139,14 +157,13 @@ pub(super) fn parse_html_response_with_opts(
         featured_snippet_description: featured_snippet_description_query_method,
     } = opts;
 
-    let result_item_query = Selector::parse(result_item_query).unwrap();
-
-    let results = dom.select(&result_item_query);
+    let result = result.as_ref().expect("result selector must be set");
+    let results = dom.select(result);
 
     for result in results {
         let title = title_query_method.call(&result)?;
-        let url = href_query_method.call_with_css_selector_override(&result, |el, s| {
-            el.select(&Selector::parse(s).unwrap()).next().map(|n| {
+        let url = href_query_method.call_with_css_selector_override(&result, |el, sel| {
+            el.select(sel).next().map(|n| {
                 n.value()
                     .attr("href")
                     .map_or_else(|| n.text().collect::<String>(), str::to_string)
@@ -178,27 +195,26 @@ pub(super) fn parse_html_response_with_opts(
         });
     }
 
-    let featured_snippet = if featured_snippet_query.is_empty() {
-        None
-    } else if let Some(featured_snippet) = dom
-        .select(&Selector::parse(featured_snippet_query).unwrap())
-        .next()
-    {
-        let title = featured_snippet_title_query_method.call(&featured_snippet)?;
-        let url = featured_snippet_href_query_method.call(&featured_snippet)?;
-        let url = normalize_url(&url);
-        let description = featured_snippet_description_query_method.call(&featured_snippet)?;
+    let featured_snippet = if let Some(ref featured_snippet_sel) = featured_snippet_query {
+        if let Some(featured_snippet) = dom.select(featured_snippet_sel).next() {
+            let title = featured_snippet_title_query_method.call(&featured_snippet)?;
+            let url = featured_snippet_href_query_method.call(&featured_snippet)?;
+            let url = normalize_url(&url);
+            let description = featured_snippet_description_query_method.call(&featured_snippet)?;
 
-        // this can happen on google if you search "what's my user agent"
-        let is_empty = description.is_empty() && title.is_empty();
-        if is_empty {
-            None
+            // this can happen on google if you search "what's my user agent"
+            let is_empty = description.is_empty() && title.is_empty();
+            if is_empty {
+                None
+            } else {
+                Some(EngineFeaturedSnippet {
+                    url,
+                    title,
+                    description,
+                })
+            }
         } else {
-            Some(EngineFeaturedSnippet {
-                url,
-                title,
-                description,
-            })
+            None
         }
     } else {
         None

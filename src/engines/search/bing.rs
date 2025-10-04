@@ -9,6 +9,19 @@ use crate::{
     parse::{parse_html_response_with_opts, ParseOpts, QueryMethod},
 };
 
+use std::sync::LazyLock;
+
+static RESULT_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("#b_results > li.b_algo").unwrap());
+static TITLE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(".b_algo h2 > a").unwrap());
+static HREF_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[href]").unwrap());
+static DESC_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(".b_caption > p, p.b_algoSlug, .b_caption .ipText").unwrap());
+static IMAGE_CONTAINER_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(".imgpt").unwrap());
+static IMAGE_EL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse(".iusc").unwrap());
+
 pub fn request(query: &str) -> reqwest::RequestBuilder {
     CLIENT.get(
         Url::parse_with_params(
@@ -24,11 +37,11 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
     parse_html_response_with_opts(
         body,
         ParseOpts::new()
-            .result("#b_results > li.b_algo")
-            .title(".b_algo h2 > a")
+            .result(RESULT_SELECTOR.clone())
+            .title(TITLE_SELECTOR.clone())
             .href(QueryMethod::Manual(Box::new(|el: &ElementRef| {
                 let url = el
-                    .select(&Selector::parse("a[href]").unwrap())
+                    .select(&HREF_SELECTOR)
                     .next()
                     .and_then(|n| n.value().attr("href"))
                     .unwrap_or_default();
@@ -37,10 +50,7 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
             .description(QueryMethod::Manual(Box::new(|el: &ElementRef| {
                 let mut description = String::new();
                 for inner_node in el
-                    .select(
-                        &Selector::parse(".b_caption > p, p.b_algoSlug, .b_caption .ipText")
-                            .unwrap(),
-                    )
+                    .select(&DESC_SELECTOR)
                     .next()
                     .map(|n| n.children().collect::<Vec<_>>())
                     .unwrap_or_default()
@@ -87,11 +97,9 @@ pub fn parse_images_response(body: &str) -> eyre::Result<EngineImagesResponse> {
 
     let mut image_results = Vec::new();
 
-    let image_container_el_sel = Selector::parse(".imgpt").unwrap();
-    let image_el_sel = Selector::parse(".iusc").unwrap();
-    for image_container_el in dom.select(&image_container_el_sel) {
+    for image_container_el in dom.select(&IMAGE_CONTAINER_SELECTOR) {
         let image_el = image_container_el
-            .select(&image_el_sel)
+            .select(&IMAGE_EL_SELECTOR)
             .next()
             .ok_or_else(|| eyre!("no image element found"))?;
 
