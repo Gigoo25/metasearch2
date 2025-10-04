@@ -215,22 +215,42 @@ pub fn parse_images_response(body: &str) -> eyre::Result<EngineImagesResponse> {
     // so... we have to scrape their internal json
 
     // iterate through every script until we find something that matches our regex
-    let internal_json_regex =
-        regex::Regex::new(r#"(?:\(function\(\)\{google\.jl=\{.+?)var \w=(\{".+?\});"#)?;
+    let internal_json_regex = regex::Regex::new(r#"var \w+=(\{".+?\});"#)?;
     let mut internal_json = None;
     let dom = scraper::Html::parse_document(body);
-    for script in dom.select(&SCRIPT_SELECTOR) {
-        let script = script.inner_html();
-        if let Some(captures) = internal_json_regex.captures(&script).and_then(|c| c.get(1)) {
-            internal_json = Some(captures.as_str().to_string());
-            break;
+    let script_count = dom.select(&SCRIPT_SELECTOR).count();
+    tracing::debug!("Found {} scripts in Google images response", script_count);
+    for (i, script) in dom.select(&SCRIPT_SELECTOR).enumerate() {
+        let script_content = script.inner_html();
+        if let Some(captures) = internal_json_regex.captures(&script_content) {
+            if let Some(json_match) = captures.get(1) {
+                tracing::debug!("Found JSON in script {}: {}", i, json_match.as_str());
+                internal_json = Some(json_match.as_str().to_string());
+                break;
+            }
+        } else {
+            tracing::debug!("No JSON match in script {}", i);
         }
     }
+    if internal_json.is_none() {
+        tracing::warn!("No internal JSON found in any script");
+    }
 
-    let internal_json =
-        internal_json.ok_or_else(|| eyre!("couldn't get internal json for google images"))?;
-    let internal_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&internal_json)?;
+    let internal_json = match internal_json {
+        Some(json) => {
+            match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&json) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    tracing::warn!("Failed to parse Google images JSON: {}", e);
+                    return Ok(EngineImagesResponse::new());
+                }
+            }
+        }
+        None => {
+            tracing::warn!("No internal JSON found for Google images, returning empty results");
+            return Ok(EngineImagesResponse::new());
+        }
+    };
 
     let mut image_results = Vec::new();
     for element_json in internal_json.values() {

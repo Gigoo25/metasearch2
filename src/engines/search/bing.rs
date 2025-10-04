@@ -214,23 +214,34 @@ pub fn parse_images_response(body: &str) -> eyre::Result<EngineImagesResponse> {
             // bing adds these unicode characters around matches
             .replace(['', ''], "");
 
-        // the text looks like "1200 x 1600 · jpegWikipedia"
-        // (the last part is incorrectly parsed since the actual text is inside another
-        // element but this is already good enough for our purposes)
+        // the text looks like "1200 x 1600 · jpegWikipedia" or "1500×1013fity.club"
         let text = image_container_el.text().collect::<String>();
-        let width_height: Vec<u64> = text
-            .split(" · ")
-            .next()
-            .unwrap_or_default()
-            .split(" x ")
-            .map(|s| s.parse().unwrap_or_default())
-            .collect();
-        let (width, height) = match width_height.as_slice() {
-            [width, height] => (*width, *height),
-            _ => {
-                warn!("couldn't get width and height from text \"{text}\"");
-                continue;
-            }
+        if text.trim().is_empty() {
+            continue;
+        }
+        let (width, height) = if let Some(captures) = regex::Regex::new(r"(\d+)\s*[×x]\s*(\d+)")
+            .unwrap()
+            .captures(&text)
+        {
+            let w: u64 = captures
+                .get(1)
+                .unwrap()
+                .as_str()
+                .parse()
+                .unwrap_or_default();
+            let h: u64 = captures
+                .get(2)
+                .unwrap()
+                .as_str()
+                .parse()
+                .unwrap_or_default();
+            (w, h)
+        } else if text.contains(':') || text.contains('>') {
+            // Skip video/duration entries
+            continue;
+        } else {
+            warn!("couldn't get width and height from text \"{text}\"");
+            continue;
         };
 
         image_results.push(EngineImageResult {
