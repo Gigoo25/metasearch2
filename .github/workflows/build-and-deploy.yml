@@ -23,9 +23,31 @@ jobs:
                   lint: 'hadolint'
               if: success()
 
+    rust-check:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout GitHub Action
+              uses: actions/checkout@main
+
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Run clippy
+              run: cargo clippy -- -D warnings
+
+            - name: Run tests
+              run: cargo test
+
+            - name: Check formatting
+              run: cargo fmt --check
+
+            - name: Check compilation
+              run: cargo check
+
     build-and-push-image:
         runs-on: ubuntu-latest
-        needs: syntax-check
+        needs: [syntax-check, rust-check]
         if: needs.syntax-check.result == 'success'
 
         steps:
