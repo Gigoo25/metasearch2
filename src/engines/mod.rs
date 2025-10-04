@@ -622,17 +622,39 @@ pub async fn autocomplete(config: &Config, query: &str) -> eyre::Result<Vec<Stri
 pub static CONFIG: OnceLock<Arc<Config>> = OnceLock::new();
 
 pub fn build_client(config: &Config) -> reqwest::Client {
+    let accept_language = if config.language.is_empty() {
+        "en-US,en;q=0.5".to_string()
+    } else {
+        let lang = &config.language;
+        let country = lang.to_uppercase();
+        format!("{}-{},{},en;q=0.5", lang, country, lang)
+    };
+
     let mut builder = reqwest::ClientBuilder::new();
     if config.proxy.is_none() {
         builder = builder.local_address(IpAddr::from_str("0.0.0.0").unwrap());
     }
     builder = builder
-        // we pretend to be a normal browser so websites don't block us
-        // (since we're not entirely a bot, we're acting on behalf of the user)
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .default_headers({
             let mut headers = HeaderMap::new();
-            headers.insert("Accept-Language", "en-US,en;q=0.5".parse().unwrap());
+            headers.insert(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+                    .parse()
+                    .unwrap(),
+            );
+            headers.insert("Accept-Language", accept_language.parse().unwrap());
+            headers.insert("Accept-Encoding", "gzip, deflate, br".parse().unwrap());
+            headers.insert("DNT", "1".parse().unwrap());
+            headers.insert("Upgrade-Insecure-Requests", "1".parse().unwrap());
+            headers.insert("Sec-Fetch-Dest", "document".parse().unwrap());
+            headers.insert("Sec-Fetch-Mode", "navigate".parse().unwrap());
+            headers.insert("Sec-Fetch-Site", "none".parse().unwrap());
+            headers.insert("Sec-Fetch-User", "?1".parse().unwrap());
+            headers.insert("Sec-Ch-Ua", "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"".parse().unwrap());
+            headers.insert("Sec-Ch-Ua-Mobile", "?0".parse().unwrap());
+            headers.insert("Sec-Ch-Ua-Platform", "\"Windows\"".parse().unwrap());
             headers
         })
         .timeout(Duration::from_secs(10));

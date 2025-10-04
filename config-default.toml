@@ -3,6 +3,7 @@
 
 bind = "0.0.0.0:28019"
 api = false
+# language = "en"
 #proxy = "socks5://127.0.0.1:9150"
 
 [ui]

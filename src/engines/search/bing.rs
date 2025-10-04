@@ -5,11 +5,42 @@ use tracing::warn;
 use url::Url;
 
 use crate::{
-    engines::{EngineImageResult, EngineImagesResponse, EngineResponse, CLIENT},
+    engines::{EngineImageResult, EngineImagesResponse, EngineResponse, SearchQuery, CLIENT},
     parse::{parse_html_response_with_opts, ParseOpts, QueryMethod},
 };
 
 use std::sync::LazyLock;
+
+fn language_to_country(lang: &str) -> &'static str {
+    match lang {
+        "en" => "US",
+        "de" => "DE",
+        "fr" => "FR",
+        "es" => "ES",
+        "it" => "IT",
+        "pt" => "PT",
+        "ru" => "RU",
+        "ja" => "JP",
+        "ko" => "KR",
+        "zh" => "CN",
+        "pl" => "PL",
+        "nl" => "NL",
+        "sv" => "SE",
+        "da" => "DK",
+        "no" => "NO",
+        "fi" => "FI",
+        "cs" => "CZ",
+        "sk" => "SK",
+        "hu" => "HU",
+        "tr" => "TR",
+        "ar" => "SA",
+        "he" => "IL",
+        "hi" => "IN",
+        "th" => "TH",
+        "vi" => "VN",
+        _ => "US",
+    }
+}
 
 static RESULT_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("#b_results > li.b_algo").unwrap());
@@ -22,15 +53,44 @@ static IMAGE_CONTAINER_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse(".imgpt").unwrap());
 static IMAGE_EL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse(".iusc").unwrap());
 
-pub fn request(query: &str) -> reqwest::RequestBuilder {
-    CLIENT.get(
+pub fn request(query: &SearchQuery) -> reqwest::RequestBuilder {
+    let modified_query = if !query.config.language.is_empty() {
+        let parts: Vec<&str> = query.config.language.split('-').collect();
+        let lang = parts.get(0).unwrap_or(&"en").to_lowercase();
+        let country = if parts.len() >= 2 {
+            parts.last().unwrap().to_uppercase()
+        } else {
+            language_to_country(&lang).to_uppercase()
+        };
+        format!("{} language:{} loc:{}", query.query, lang, country)
+    } else {
+        query.query.clone()
+    };
+    let mut request = CLIENT.get(
         Url::parse_with_params(
             "https://www.bing.com/search",
             // filters=rcrse:"1" makes it not try to autocorrect
-            &[("q", query), ("filters", "rcrse:\"1\"")],
+            &[("q", modified_query.as_str()), ("filters", "rcrse:\"1\"")],
         )
         .unwrap(),
-    )
+    );
+
+    if !query.config.language.is_empty() {
+        let parts: Vec<&str> = query.config.language.split('-').collect();
+        let lang = parts.get(0).unwrap_or(&"en").to_lowercase();
+        let region = if parts.len() >= 2 {
+            query.config.language.clone()
+        } else {
+            format!("{}-{}", lang, language_to_country(&lang))
+        };
+        let cookie = format!(
+            "_EDGE_CD=m={}&u={}; _EDGE_S=mkt={}&ui={}",
+            region, lang, region, lang
+        );
+        request = request.header("Cookie", cookie);
+    }
+
+    request
 }
 
 pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
@@ -76,19 +136,48 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
     )
 }
 
-pub fn request_images(query: &str) -> reqwest::RequestBuilder {
-    CLIENT.get(
+pub fn request_images(query: &SearchQuery) -> reqwest::RequestBuilder {
+    let modified_query = if !query.config.language.is_empty() {
+        let parts: Vec<&str> = query.config.language.split('-').collect();
+        let lang = parts.get(0).unwrap_or(&"en").to_lowercase();
+        let country = if parts.len() >= 2 {
+            parts.last().unwrap().to_uppercase()
+        } else {
+            language_to_country(&lang).to_uppercase()
+        };
+        format!("{} language:{} loc:{}", query.query, lang, country)
+    } else {
+        query.query.clone()
+    };
+    let mut request = CLIENT.get(
         Url::parse_with_params(
             "https://www.bing.com/images/async",
             &[
-                ("q", query),
+                ("q", modified_query.as_str()),
                 ("async", "content"),
                 ("first", "1"),
                 ("count", "35"),
             ],
         )
         .unwrap(),
-    )
+    );
+
+    if !query.config.language.is_empty() {
+        let parts: Vec<&str> = query.config.language.split('-').collect();
+        let lang = parts.get(0).unwrap_or(&"en").to_lowercase();
+        let region = if parts.len() >= 2 {
+            query.config.language.clone()
+        } else {
+            format!("{}-{}", lang, language_to_country(&lang))
+        };
+        let cookie = format!(
+            "_EDGE_CD=m={}&u={}; _EDGE_S=mkt={}&ui={}",
+            region, lang, region, lang
+        );
+        request = request.header("Cookie", cookie);
+    }
+
+    request
 }
 
 #[tracing::instrument(skip(body))]

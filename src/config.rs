@@ -17,6 +17,7 @@ impl Default for Config {
             bind: "0.0.0.0:28019".parse().unwrap(),
             api: false,
             proxy: None,
+            language: "en".to_string(),
             ui: UiConfig {
                 show_engine_list_separator: false,
                 show_version_info: false,
@@ -154,6 +155,7 @@ pub struct Config {
     /// Whether the JSON API should be accessible.
     pub api: bool,
     pub proxy: Option<String>,
+    pub language: String,
     pub ui: UiConfig,
     pub image_search: ImageSearchConfig,
     // wrapped in an arc to make Config cheaper to clone
@@ -166,6 +168,7 @@ pub struct PartialConfig {
     pub bind: Option<SocketAddr>,
     pub api: Option<bool>,
     pub proxy: Option<String>,
+    pub language: Option<String>,
     pub ui: Option<PartialUiConfig>,
     pub image_search: Option<PartialImageSearchConfig>,
     pub engines: Option<PartialEnginesConfig>,
@@ -177,6 +180,7 @@ impl Config {
         self.bind = partial.bind.unwrap_or(self.bind);
         self.api = partial.api.unwrap_or(self.api);
         self.proxy = partial.proxy.or(self.proxy.clone());
+        self.language = partial.language.unwrap_or(self.language.clone());
         self.ui.overlay(partial.ui.unwrap_or_default());
         self.image_search
             .overlay(partial.image_search.unwrap_or_default());
