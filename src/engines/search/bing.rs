@@ -52,11 +52,13 @@ static DESC_SELECTOR: LazyLock<Selector> =
 static IMAGE_CONTAINER_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse(".imgpt").unwrap());
 static IMAGE_EL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse(".iusc").unwrap());
+static SIZE_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(\d+)\s*[×x]\s*(\d+)").unwrap());
 
 pub fn request(query: &SearchQuery) -> reqwest::RequestBuilder {
     let modified_query = if !query.config.language.is_empty() {
         let parts: Vec<&str> = query.config.language.split('-').collect();
-        let lang = parts.get(0).unwrap_or(&"en").to_lowercase();
+        let lang = parts.first().unwrap_or(&"en").to_lowercase();
         let country = if parts.len() >= 2 {
             parts.last().unwrap().to_uppercase()
         } else {
@@ -77,7 +79,7 @@ pub fn request(query: &SearchQuery) -> reqwest::RequestBuilder {
 
     if !query.config.language.is_empty() {
         let parts: Vec<&str> = query.config.language.split('-').collect();
-        let lang = parts.get(0).unwrap_or(&"en").to_lowercase();
+        let lang = parts.first().unwrap_or(&"en").to_lowercase();
         let region = if parts.len() >= 2 {
             query.config.language.clone()
         } else {
@@ -139,7 +141,7 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
 pub fn request_images(query: &SearchQuery) -> reqwest::RequestBuilder {
     let modified_query = if !query.config.language.is_empty() {
         let parts: Vec<&str> = query.config.language.split('-').collect();
-        let lang = parts.get(0).unwrap_or(&"en").to_lowercase();
+        let lang = parts.first().unwrap_or(&"en").to_lowercase();
         let country = if parts.len() >= 2 {
             parts.last().unwrap().to_uppercase()
         } else {
@@ -164,7 +166,7 @@ pub fn request_images(query: &SearchQuery) -> reqwest::RequestBuilder {
 
     if !query.config.language.is_empty() {
         let parts: Vec<&str> = query.config.language.split('-').collect();
-        let lang = parts.get(0).unwrap_or(&"en").to_lowercase();
+        let lang = parts.first().unwrap_or(&"en").to_lowercase();
         let region = if parts.len() >= 2 {
             query.config.language.clone()
         } else {
@@ -219,10 +221,7 @@ pub fn parse_images_response(body: &str) -> eyre::Result<EngineImagesResponse> {
         if text.trim().is_empty() {
             continue;
         }
-        let (width, height) = if let Some(captures) = regex::Regex::new(r"(\d+)\s*[×x]\s*(\d+)")
-            .unwrap()
-            .captures(&text)
-        {
+        let (width, height) = if let Some(captures) = SIZE_REGEX.captures(&text) {
             let w: u64 = captures
                 .get(1)
                 .unwrap()

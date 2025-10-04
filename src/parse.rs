@@ -8,6 +8,7 @@ use crate::{
 use scraper::{Html, Selector};
 use tracing::trace;
 
+#[derive(Default)]
 pub struct ParseOpts {
     result: Option<Selector>,
     title: QueryMethod,
@@ -18,21 +19,6 @@ pub struct ParseOpts {
     featured_snippet_title: QueryMethod,
     featured_snippet_href: QueryMethod,
     featured_snippet_description: QueryMethod,
-}
-
-impl Default for ParseOpts {
-    fn default() -> Self {
-        Self {
-            result: None,
-            title: QueryMethod::default(),
-            href: QueryMethod::default(),
-            description: QueryMethod::default(),
-            featured_snippet: None,
-            featured_snippet_title: QueryMethod::default(),
-            featured_snippet_href: QueryMethod::default(),
-            featured_snippet_description: QueryMethod::default(),
-        }
-    }
 }
 
 impl ParseOpts {
