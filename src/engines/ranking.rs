@@ -15,6 +15,7 @@ pub fn merge_engine_responses(
     responses: HashMap<Engine, EngineResponse>,
 ) -> Response {
     let mut search_results: Vec<SearchResult<EngineSearchResult>> = Vec::new();
+    let mut url_to_index: HashMap<String, usize> = HashMap::new();
     let mut featured_snippet: Option<FeaturedSnippet> = None;
     let mut answer: Option<Answer> = None;
     let mut infobox: Option<Infobox> = None;
@@ -36,10 +37,8 @@ pub fn merge_engine_responses(
             }
             let result_score = result_score * url_weight;
 
-            if let Some(existing_result) = search_results
-                .iter_mut()
-                .find(|r| r.result.url == search_result.url)
-            {
+            if let Some(&index) = url_to_index.get(&search_result.url) {
+                let existing_result = &mut search_results[index];
                 // if the weight of this engine is higher than every other one then replace the
                 // title and description
                 if engine_config.weight
@@ -60,6 +59,8 @@ pub fn merge_engine_responses(
                 existing_result.engines.insert(engine);
                 existing_result.score += result_score;
             } else {
+                let new_index = search_results.len();
+                url_to_index.insert(search_result.url.clone(), new_index);
                 search_results.push(SearchResult {
                     result: search_result,
                     engines: [engine].iter().copied().collect(),
@@ -139,6 +140,7 @@ pub fn merge_autocomplete_responses(
     responses: HashMap<Engine, Vec<String>>,
 ) -> Vec<String> {
     let mut autocomplete_results: Vec<AutocompleteResult> = Vec::new();
+    let mut query_to_index: HashMap<String, usize> = HashMap::new();
 
     for (engine, response) in responses {
         let engine_config = config.engines.get(engine);
@@ -149,12 +151,11 @@ pub fn merge_autocomplete_responses(
             let base_result_score = 1. / (result_index + 1) as f64;
             let result_score = base_result_score * engine_config.weight;
 
-            if let Some(existing_result) = autocomplete_results
-                .iter_mut()
-                .find(|r| r.query == autocomplete_result)
-            {
-                existing_result.score += result_score;
+            if let Some(&index) = query_to_index.get(&autocomplete_result) {
+                autocomplete_results[index].score += result_score;
             } else {
+                let new_index = autocomplete_results.len();
+                query_to_index.insert(autocomplete_result.clone(), new_index);
                 autocomplete_results.push(AutocompleteResult {
                     query: autocomplete_result,
                     score: result_score,
@@ -173,6 +174,7 @@ pub fn merge_images_responses(
     responses: HashMap<Engine, EngineImagesResponse>,
 ) -> ImagesResponse {
     let mut image_results: Vec<SearchResult<EngineImageResult>> = Vec::new();
+    let mut image_url_to_index: HashMap<String, usize> = HashMap::new();
 
     for (engine, response) in responses {
         let engine_config = config.engines.get(engine);
@@ -183,10 +185,8 @@ pub fn merge_images_responses(
             let base_result_score = 1. / (result_index + 1) as f64;
             let result_score = base_result_score * engine_config.weight;
 
-            if let Some(existing_result) = image_results
-                .iter_mut()
-                .find(|r| r.result.image_url == image_result.image_url)
-            {
+            if let Some(&index) = image_url_to_index.get(&image_result.image_url) {
+                let existing_result = &mut image_results[index];
                 // if the weight of this engine is higher than every other one then replace the
                 // title and page url
                 if engine_config.weight
@@ -207,6 +207,8 @@ pub fn merge_images_responses(
                 existing_result.engines.insert(engine);
                 existing_result.score += result_score;
             } else {
+                let new_index = image_results.len();
+                image_url_to_index.insert(image_result.image_url.clone(), new_index);
                 image_results.push(SearchResult {
                     result: image_result,
                     engines: [engine].iter().copied().collect(),
