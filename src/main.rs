@@ -1,10 +1,13 @@
 use std::{
     env,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use config::Config;
 use tracing::error;
+
+use crate::engines::CONFIG;
 
 pub mod config;
 pub mod engines;
@@ -29,6 +32,10 @@ async fn main() {
             return;
         }
     };
+    CONFIG.get_or_init(|| Arc::new(config.clone()));
+    if let Some(proxy_url) = &CONFIG.get().unwrap().proxy {
+        tracing::info!("SOCKS5 proxy enabled: {}", proxy_url);
+    }
     web::run(config).await;
 }
 

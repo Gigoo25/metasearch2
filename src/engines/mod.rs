@@ -4,7 +4,7 @@ use std::{
     net::IpAddr,
     ops::Deref,
     str::FromStr,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -315,7 +315,14 @@ async fn make_request(
 ) -> eyre::Result<HttpResponse> {
     send_engine_progress_update(engine, EngineProgressUpdate::Requesting);
 
-    let mut res = request.send().await?;
+    let mut res = match request.send().await {
+        Ok(res) => res,
+        Err(e) => {
+            tracing::error!("Request failed for {}: {}", engine, e);
+            send_engine_progress_update(engine, EngineProgressUpdate::Error(e.to_string()));
+            return Err(e.into());
+        }
+    };
 
     send_engine_progress_update(engine, EngineProgressUpdate::Downloading);
 
@@ -544,7 +551,11 @@ pub async fn search(
 ) -> eyre::Result<()> {
     let start_time = Instant::now();
 
-    info!("Doing search");
+    if let Some(proxy) = &query.config.proxy {
+        info!("Doing search using SOCKS5 proxy: {}", proxy);
+    } else {
+        info!("Doing search");
+    }
 
     let progress_tx = &progress_tx;
     let send_engine_progress_update = |engine: Engine, update: EngineProgressUpdate| {
@@ -608,9 +619,14 @@ pub async fn autocomplete(config: &Config, query: &str) -> eyre::Result<Vec<Stri
     ))
 }
 
-pub static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::ClientBuilder::new()
-        .local_address(IpAddr::from_str("0.0.0.0").unwrap())
+pub static CONFIG: OnceLock<Arc<Config>> = OnceLock::new();
+
+pub fn build_client(config: &Config) -> reqwest::Client {
+    let mut builder = reqwest::ClientBuilder::new();
+    if config.proxy.is_none() {
+        builder = builder.local_address(IpAddr::from_str("0.0.0.0").unwrap());
+    }
+    builder = builder
         // we pretend to be a normal browser so websites don't block us
         // (since we're not entirely a bot, we're acting on behalf of the user)
         .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0")
@@ -619,9 +635,18 @@ pub static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
             headers.insert("Accept-Language", "en-US,en;q=0.5".parse().unwrap());
             headers
         })
-        .timeout(Duration::from_secs(10))
-        .build()
-        .unwrap()
+        .timeout(Duration::from_secs(10));
+
+    if let Some(proxy_url) = &config.proxy {
+        builder = builder.proxy(reqwest::Proxy::all(proxy_url).unwrap());
+    }
+
+    builder.build().unwrap()
+}
+
+pub static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    let config = CONFIG.get().unwrap();
+    build_client(config)
 });
 
 #[derive(Debug, Clone, Serialize)]
