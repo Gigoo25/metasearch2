@@ -13,7 +13,7 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-COPY --from=builder /app/config.toml /usr/local/bin/config.toml
+COPY --from=builder /app/config-default.toml /usr/local/bin/config.toml
 COPY --from=builder /app/target/release/metasearch /usr/local/bin/metasearch
 ARG CONFIG
 ENV CONFIG=${CONFIG}
