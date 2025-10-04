@@ -3,7 +3,6 @@ use std::{
     time::Instant,
 };
 
-use eyre::eyre;
 use parking_lot::RwLock;
 use rand::distr::{slice::Choose, SampleString};
 use scraper::{ElementRef, Selector};
