@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.91-alpine as chef
+FROM lukemathwalker/cargo-chef:latest-rust-slim as chef
 WORKDIR /app
 
 FROM chef AS planner
@@ -11,11 +11,11 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release
 
-FROM alpine:latest AS runtime
+FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-COPY --from=builder /app/config.toml /usr/local/bin/config.toml
+COPY --from=builder /app/config-default.toml /usr/local/bin/config.toml
 COPY --from=builder /app/target/release/metasearch /usr/local/bin/metasearch
 ARG CONFIG
 ENV CONFIG=${CONFIG}
 EXPOSE 28019
-ENTRYPOINT /usr/local/bin/metasearch $CONFIG
+ENTRYPOINT ["sh", "-c", "/usr/local/bin/metasearch $CONFIG"]
