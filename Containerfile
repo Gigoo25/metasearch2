@@ -1,5 +1,18 @@
-FROM lukemathwalker/cargo-chef:latest-rust-slim as chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.93-slim as chef
 WORKDIR /app
+
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends \
+  build-essential=12.12 \
+  cmake=3.31.6-2 \
+  perl=5.40.1-6 \
+  pkg-config=1.8.1-4 \
+  clang=1:19.0-63 \
+  libclang-dev=1:19.0-63 \
+  git=1:2.47.3-0+deb13u1 \
+  ca-certificates=20250419 \
+  curl=8.14.1-2+deb13u2 \
+  && rm -rf /var/lib/apt/lists/*
 
 FROM chef AS planner
 COPY . .
@@ -11,7 +24,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 WORKDIR /app
 COPY --from=builder /app/config-default.toml /usr/local/bin/config.toml
 COPY --from=builder /app/target/release/metasearch /usr/local/bin/metasearch
