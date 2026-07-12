@@ -9,7 +9,7 @@ use axum::{
 use tracing::error;
 use wreq::header;
 
-use crate::{config::Config, engines};
+use crate::config::Config;
 
 pub async fn route(
     Query(params): Query<HashMap<String, String>>,
@@ -25,15 +25,22 @@ pub async fn route(
         return (StatusCode::BAD_REQUEST, "Missing `url` parameter").into_response();
     }
 
-    let mut res = match engines::CLIENT
-        .get(&url)
-        .header("accept", "image/*")
-        .send()
-        .await
-    {
+    // ssrf protection. i sure hope this is good enough!
+    let Ok(v) = url_jail::validate(&url, url_jail::Policy::PublicOnly).await else {
+        return (StatusCode::BAD_REQUEST, "Invalid URL").into_response();
+    };
+    drop(url);
+    let Ok(client) = wreq::Client::builder()
+        .resolve(&v.host, v.to_socket_addr())
+        .build()
+    else {
+        return (StatusCode::BAD_REQUEST, "Failed to build client").into_response();
+    };
+
+    let mut res = match client.get(&v.url).header("accept", "image/*").send().await {
         Ok(res) => res,
         Err(err) => {
-            error!("Image proxy error for {url}: {err}");
+            error!("Image proxy error for {}: {err}", v.url);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Image proxy error").into_response();
         }
     };
