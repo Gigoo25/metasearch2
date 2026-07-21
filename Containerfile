@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.93-slim as chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.93-slim AS chef
 WORKDIR /app
 
 RUN apt-get update && \
