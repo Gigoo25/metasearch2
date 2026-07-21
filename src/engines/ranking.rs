@@ -50,7 +50,7 @@ pub fn merge_engine_responses(
                             let other_engine_config = config.engines.get(other_engine);
                             other_engine_config.weight
                         })
-                        .max_by(|a, b| a.partial_cmp(b).unwrap())
+                        .max_by(|a, b| a.total_cmp(b))
                         .unwrap_or(0.)
                 {
                     existing_result.result.title = search_result.title;
@@ -123,7 +123,7 @@ pub fn merge_engine_responses(
         }
     }
 
-    search_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    search_results.sort_by(|a, b| b.score.total_cmp(&a.score));
 
     Response {
         search_results,
@@ -163,7 +163,7 @@ pub fn merge_autocomplete_responses(
         }
     }
 
-    autocomplete_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    autocomplete_results.sort_by(|a, b| b.score.total_cmp(&a.score));
 
     autocomplete_results.into_iter().map(|r| r.query).collect()
 }
@@ -216,7 +216,7 @@ pub fn merge_images_responses(
         }
     }
 
-    image_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    image_results.sort_by(|a, b| b.score.total_cmp(&a.score));
 
     ImagesResponse {
         image_results,

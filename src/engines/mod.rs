@@ -418,13 +418,8 @@ async fn make_requests(
         });
     }
 
-    let mut response_futures = Vec::new();
-    for request in requests {
-        response_futures.push(request);
-    }
-
     let mut responses = HashMap::new();
-    for response_result in join_all(response_futures).await {
+    for response_result in join_all(requests).await {
         let response_result: eyre::Result<_> = response_result; // this line is necessary to make type inference work
         if let Ok((engine, response)) = response_result {
             responses.insert(engine, response);
@@ -475,13 +470,8 @@ async fn make_requests(
             }
         }
 
-        let mut postsearch_response_futures = Vec::new();
-        for request in postsearch_requests {
-            postsearch_response_futures.push(request);
-        }
-
         let postsearch_responses_result: eyre::Result<HashMap<_, _>> =
-            join_all(postsearch_response_futures)
+            join_all(postsearch_requests)
                 .await
                 .into_iter()
                 .collect();
