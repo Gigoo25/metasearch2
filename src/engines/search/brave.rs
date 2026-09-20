@@ -15,7 +15,7 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
     parse_html_response_with_opts(
         body,
         ParseOpts::new()
-            .result("#results > .snippet[data-pos]:not(.standalone)")
+            .result("main .snippet[data-pos]:not(.standalone)")
             .title(".title")
             .href("a")
             .description(".generic-snippet, .video-snippet > .snippet-description"),

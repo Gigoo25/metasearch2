@@ -28,13 +28,18 @@ pub fn parse_response(body: &str) -> Option<PreEscaped<String>> {
     let url = format!("https://github.com{url_relative}");
 
     let embedded_data_script = dom
-        .select(&Selector::parse("script[data-target='react-partial.embeddedData']").unwrap())
+        .select(
+            &Selector::parse(
+                "react-app[app-name='code-view'] > script[data-target='react-app.embeddedData']",
+            )
+            .unwrap(),
+        )
         .next_back()?
         .inner_html();
     let embedded_data = serde_json::from_str::<serde_json::Value>(&embedded_data_script).ok()?;
     let readme_html = embedded_data
-        .get("props")?
-        .get("initialPayload")?
+        .get("payload")?
+        .get("codeViewRepoRoute")?
         .get("overview")?
         .get("overviewFiles")?
         .as_array()?
