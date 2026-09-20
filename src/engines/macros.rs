@@ -18,6 +18,13 @@ macro_rules! engines {
                     $(Engine::$engine => $id,)*
                 }
             }
+
+            #[must_use]
+            pub fn variant_name(&self) -> &'static str {
+                match self {
+                    $(Engine::$engine => stringify!($engine),)*
+                }
+            }
         }
 
         impl FromStr for Engine {
@@ -37,6 +44,10 @@ macro_rules! engines {
 macro_rules! engine_parse_response {
     ($res:ident, $module:ident::$engine_id:ident::None) => {
         None
+    };
+    // engines that need access to the request/config, not just the body
+    ($res:ident, $module:ident::$engine_id:ident::parse_with_config) => {
+        Some($module::$engine_id::parse_with_config($res))
     };
     ($res:ident, $module:ident::$engine_id:ident::$parse_response:ident) => {
         Some($module::$engine_id::$parse_response($res.into()))

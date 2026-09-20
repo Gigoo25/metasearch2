@@ -18,8 +18,9 @@ pub fn normalize_url(url: &str) -> String {
         return url.to_string();
     };
 
-    // make sure the scheme is https
-    if url.scheme() == "http" {
+    // make sure the scheme is https, except for local addresses (like a local
+    // kiwix instance), where http is expected and upgrading would break links
+    if url.scheme() == "http" && !is_local_host(&url) {
         url.set_scheme("https").unwrap();
     }
 
@@ -71,6 +72,17 @@ pub fn normalize_url(url: &str) -> String {
     };
 
     url
+}
+
+fn is_local_host(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(domain)) => {
+            domain == "localhost" || domain.ends_with(".localhost") || domain.ends_with(".local")
+        }
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
 }
 
 impl HostAndPath {
@@ -139,7 +151,7 @@ impl HostAndPath {
 
 pub fn apply_url_replacements(url: &str, urls_config: &UrlsConfig) -> String {
     let Ok(mut url) = Url::parse(url) else {
-        error!("failed to parse url");
+        // relative urls (like local kiwix content) can't be rewritten
         return url.to_string();
     };
 
@@ -165,7 +177,6 @@ pub fn apply_url_replacements(url: &str, urls_config: &UrlsConfig) -> String {
 }
 pub fn get_url_weight(url: &str, urls_config: &UrlsConfig) -> f64 {
     let Ok(url) = Url::parse(url) else {
-        error!("failed to parse url");
         return 1.;
     };
 
@@ -193,6 +204,39 @@ mod tests {
         };
         let normalized_url = apply_url_replacements(url, &urls_config);
         assert_eq!(normalized_url, expected);
+    }
+
+    #[test]
+    fn test_relative_url_is_kept() {
+        let urls_config = UrlsConfig {
+            replace: vec![],
+            weight: vec![],
+        };
+        assert_eq!(
+            apply_url_replacements("/kiwix/content/book/A/Article", &urls_config),
+            "/kiwix/content/book/A/Article"
+        );
+        assert_eq!(
+            get_url_weight("/kiwix/content/book/A/Article", &urls_config),
+            1.
+        );
+    }
+
+    #[test]
+    fn test_local_hosts_keep_http() {
+        for url in [
+            "http://localhost:8080/content/book/A/Article",
+            "http://127.0.0.1:8080/content/book/A/Article",
+            "http://192.168.1.10:8080/content/book/A/Article",
+            "http://kiwix.local/content/book/A/Article",
+        ] {
+            assert_eq!(normalize_url(url), url, "{url} should keep http");
+        }
+
+        assert_eq!(
+            normalize_url("http://example.com/article"),
+            "https://example.com/article"
+        );
     }
 
     #[test]

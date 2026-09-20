@@ -16,8 +16,11 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 use wreq_util::Emulation;
 
+mod cache;
 mod macros;
 mod ranking;
+
+use self::cache::{CacheKey, CachedSearch};
 use crate::{
     config::Config, engine_autocomplete_requests, engine_image_requests,
     engine_postsearch_requests, engine_requests, engines,
@@ -37,6 +40,7 @@ engines! {
     RightDao = "rightdao",
     Stract = "stract",
     Yep = "yep",
+    Kiwix = "kiwix",
     // answer
     Dictionary = "dictionary",
     Fend = "fend",
@@ -66,6 +70,7 @@ engine_requests! {
     RightDao => search::rightdao::request, parse_response,
     Stract => search::stract::request, parse_response,
     Yep => search::yep::request, parse_response,
+    Kiwix => search::kiwix::request, parse_with_config,
     // answer
     Dictionary => answer::dictionary::request, parse_response,
     Fend => answer::fend::request, None,
@@ -110,7 +115,17 @@ impl<'de> Deserialize<'de> for Engine {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        Engine::from_str(&s).map_err(|_| serde::de::Error::custom(format!("invalid engine '{s}'")))
+        // serialization uses the variant name ("Kiwix") while the config and some
+        // older json use the engine id ("kiwix"); accept both
+        Engine::from_str(&s)
+            .or_else(|()| {
+                Engine::all()
+                    .iter()
+                    .copied()
+                    .find(|engine| engine.variant_name() == s)
+                    .ok_or(())
+            })
+            .map_err(|()| serde::de::Error::custom(format!("invalid engine '{s}'")))
     }
 }
 
@@ -132,7 +147,7 @@ impl Deref for SearchQuery {
     }
 }
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SearchTab {
     #[default]
     All,
@@ -226,7 +241,7 @@ impl From<HttpResponse> for wreq::Response {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineSearchResult {
     pub url: String,
     pub title: String,
@@ -283,7 +298,7 @@ impl EngineImagesResponse {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineImageResult {
     pub image_url: String,
     pub page_url: String,
@@ -327,6 +342,26 @@ impl ProgressUpdate {
     }
 }
 
+/// A response that was actually served to the client, to be written to the
+/// cache if it contains nothing request-dependent.
+struct ServedSearch {
+    response: ResponseForTab,
+    infobox: Option<Infobox>,
+    /// Whether it's safe to cache this response. False when the network was
+    /// unreachable and the results are only whatever works offline.
+    cacheable: bool,
+}
+
+/// Replaces the config that was serialized into a cached response with the
+/// current config, since `Response::config` is skipped by serde.
+fn with_config(mut response: ResponseForTab, config: Arc<Config>) -> ResponseForTab {
+    match &mut response {
+        ResponseForTab::All(response) => response.config = config,
+        ResponseForTab::Images(response) => response.config = config,
+    }
+    response
+}
+
 async fn make_request(
     request: wreq::RequestBuilder,
     engine: Engine,
@@ -360,7 +395,8 @@ async fn make_requests(
     progress_tx: &mpsc::UnboundedSender<ProgressUpdate>,
     start_time: Instant,
     send_engine_progress_update: &impl Fn(Engine, EngineProgressUpdate),
-) -> eyre::Result<()> {
+    stale: Option<CachedSearch>,
+) -> eyre::Result<Option<ServedSearch>> {
     let mut requests = Vec::new();
     for &engine in Engine::all() {
         let engine_config = query.config.engines.get(engine);
@@ -378,6 +414,7 @@ async fn make_requests(
                 }
             };
 
+            let is_network = matches!(request_response, RequestResponse::Http(_));
             let response = match request_response {
                 RequestResponse::Http(request) => {
                     let http_response =
@@ -414,24 +451,52 @@ async fn make_requests(
                 RequestResponse::None => EngineResponse::new(),
             };
 
-            Ok((engine, response))
+            Ok((engine, response, is_network))
         });
     }
 
     let mut responses = HashMap::new();
+    let mut network_succeeded = false;
+    let mut network_failed = false;
     for response_result in join_all(requests).await {
         let response_result: eyre::Result<_> = response_result; // this line is necessary to make type inference work
-        if let Ok((engine, response)) = response_result {
-            responses.insert(engine, response);
+        match response_result {
+            Ok((engine, response, is_network)) => {
+                network_succeeded |= is_network;
+                responses.insert(engine, response);
+            }
+            Err(_) => network_failed = true,
         }
     }
 
     let response = ranking::merge_engine_responses(query.config.clone(), responses);
     let has_infobox = response.infobox.is_some();
+    let network_unavailable = network_failed && !network_succeeded;
+
+    if network_unavailable {
+        // every engine that needed the network failed; serve a stale cache entry
+        // if there is one
+        if let Some(stale) = stale {
+            progress_tx.send(ProgressUpdate::new(
+                ProgressUpdateData::Response(stale.response),
+                start_time,
+            ))?;
+            if let Some(infobox) = stale.infobox {
+                progress_tx.send(ProgressUpdate::new(
+                    ProgressUpdateData::PostSearchInfobox(infobox),
+                    start_time,
+                ))?;
+            }
+            return Ok(None);
+        }
+    }
+
     progress_tx.send(ProgressUpdate::new(
         ProgressUpdateData::Response(ResponseForTab::All(response.clone())),
         start_time,
     ))?;
+
+    let mut postsearch_infobox = None;
 
     if !has_infobox {
         // post-search
@@ -471,25 +536,28 @@ async fn make_requests(
         }
 
         let postsearch_responses_result: eyre::Result<HashMap<_, _>> =
-            join_all(postsearch_requests)
-                .await
-                .into_iter()
-                .collect();
+            join_all(postsearch_requests).await.into_iter().collect();
         let postsearch_responses = postsearch_responses_result?;
 
         for (engine, response) in postsearch_responses {
             if let Some(html) = response {
+                let infobox = Infobox { html, engine };
                 progress_tx.send(ProgressUpdate::new(
-                    ProgressUpdateData::PostSearchInfobox(Infobox { html, engine }),
+                    ProgressUpdateData::PostSearchInfobox(infobox.clone()),
                     start_time,
                 ))?;
-                // break so we don't send multiple infoboxes
+                postsearch_infobox = Some(infobox);
+                // stop so we don't send multiple infoboxes
                 break;
             }
         }
     }
 
-    Ok(())
+    Ok(Some(ServedSearch {
+        response: ResponseForTab::All(response),
+        infobox: postsearch_infobox,
+        cacheable: !network_unavailable,
+    }))
 }
 
 async fn make_image_requests(
@@ -497,7 +565,8 @@ async fn make_image_requests(
     progress_tx: &mpsc::UnboundedSender<ProgressUpdate>,
     start_time: Instant,
     send_engine_progress_update: &impl Fn(Engine, EngineProgressUpdate),
-) -> eyre::Result<()> {
+    stale: Option<CachedSearch>,
+) -> eyre::Result<Option<ServedSearch>> {
     let mut requests = Vec::new();
     for &engine in Engine::all() {
         let engine_config = query.config.engines.get(engine);
@@ -507,6 +576,7 @@ async fn make_image_requests(
 
         requests.push(async move {
             let request_response = engine.request_images(query);
+            let is_network = matches!(request_response, RequestResponse::Http(_));
 
             let response = match request_response {
                 RequestResponse::Http(request) => {
@@ -532,26 +602,49 @@ async fn make_image_requests(
                 RequestResponse::None => EngineImagesResponse::new(),
             };
 
-            Ok((engine, response))
+            Ok((engine, response, is_network))
         });
     }
 
-    let mut response_futures = Vec::new();
-    for request in requests {
-        response_futures.push(request);
+    let mut responses = HashMap::new();
+    let mut network_succeeded = false;
+    let mut network_failed = false;
+    for response_result in join_all(requests).await {
+        let response_result: eyre::Result<_> = response_result;
+        match response_result {
+            Ok((engine, response, is_network)) => {
+                network_succeeded |= is_network;
+                responses.insert(engine, response);
+            }
+            Err(_) => network_failed = true,
+        }
     }
 
-    let responses_result: eyre::Result<HashMap<_, _>> =
-        join_all(response_futures).await.into_iter().collect();
-    let responses = responses_result?;
-
     let response = ranking::merge_images_responses(query.config.clone(), responses);
+    let network_unavailable = network_failed && !network_succeeded;
+
+    if network_unavailable {
+        // every engine that needed the network failed; serve a stale cache entry
+        // if there is one
+        if let Some(stale) = stale {
+            progress_tx.send(ProgressUpdate::new(
+                ProgressUpdateData::Response(stale.response),
+                start_time,
+            ))?;
+            return Ok(None);
+        }
+    }
+
     progress_tx.send(ProgressUpdate::new(
         ProgressUpdateData::Response(ResponseForTab::Images(response.clone())),
         start_time,
     ))?;
 
-    Ok(())
+    Ok(Some(ServedSearch {
+        response: ResponseForTab::Images(response),
+        infobox: None,
+        cacheable: !network_unavailable,
+    }))
 }
 
 #[tracing::instrument(fields(query = %query.query), skip(progress_tx))]
@@ -563,6 +656,10 @@ pub async fn search(
 
     info!("Doing search");
 
+    if query.tab == SearchTab::Images && !query.config.image_search.enabled {
+        bail!("unknown tab");
+    }
+
     let progress_tx = &progress_tx;
     let send_engine_progress_update = |engine: Engine, update: EngineProgressUpdate| {
         let _ = progress_tx.send(ProgressUpdate::new(
@@ -571,16 +668,66 @@ pub async fn search(
         ));
     };
 
-    match query.tab {
+    // look for a cached response before contacting any engines
+    let cache_config = &query.config.cache;
+    let cache_key = CacheKey {
+        query: cache::normalize_query(&query.query),
+        tab: query.tab,
+        config_hash: cache::config_fingerprint(&query.config),
+    };
+    let mut stale = None;
+    if cache_config.enabled {
+        if let Some(entry) = cache::load(cache_config, &cache_key).await {
+            let age = cache::age_secs(&entry);
+            let mut entry = cache::CachedSearch {
+                response: with_config(entry.response, query.config.clone()),
+                infobox: entry.infobox,
+                stored_at: entry.stored_at,
+            };
+            if age <= cache_config.fresh_ttl_secs {
+                progress_tx.send(ProgressUpdate::new(
+                    ProgressUpdateData::Response(entry.response),
+                    start_time,
+                ))?;
+                if let Some(infobox) = entry.infobox.take() {
+                    progress_tx.send(ProgressUpdate::new(
+                        ProgressUpdateData::PostSearchInfobox(infobox),
+                        start_time,
+                    ))?;
+                }
+                return Ok(());
+            } else if age <= cache_config.stale_ttl_secs {
+                stale = Some(entry);
+            }
+        }
+    }
+
+    let served = match query.tab {
         SearchTab::All => {
-            make_requests(query, progress_tx, start_time, &send_engine_progress_update).await?
+            make_requests(
+                query,
+                progress_tx,
+                start_time,
+                &send_engine_progress_update,
+                stale,
+            )
+            .await?
         }
-        SearchTab::Images if query.config.image_search.enabled => {
-            make_image_requests(query, progress_tx, start_time, &send_engine_progress_update)
-                .await?
+        SearchTab::Images => {
+            make_image_requests(
+                query,
+                progress_tx,
+                start_time,
+                &send_engine_progress_update,
+                stale,
+            )
+            .await?
         }
-        _ => {
-            bail!("unknown tab");
+    };
+
+    if let Some(served) = served {
+        if served.cacheable && cache::is_cacheable(&served.response) {
+            cache::store(cache_config, &cache_key, served.response, served.infobox).await;
         }
     }
 
@@ -639,7 +786,7 @@ pub static CLIENT: LazyLock<wreq::Client> = LazyLock::new(|| {
         .unwrap()
 });
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
     pub search_results: Vec<SearchResult<EngineSearchResult>>,
     pub featured_snippet: Option<FeaturedSnippet>,
@@ -649,28 +796,28 @@ pub struct Response {
     pub config: Arc<Config>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImagesResponse {
     pub image_results: Vec<SearchResult<EngineImageResult>>,
     #[serde(skip)]
     pub config: Arc<Config>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ResponseForTab {
     All(Response),
     Images(ImagesResponse),
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct SearchResult<R: Serialize> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult<R> {
     pub result: R,
     pub engines: BTreeSet<Engine>,
     pub score: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeaturedSnippet {
     pub url: String,
     pub title: String,
@@ -678,16 +825,22 @@ pub struct FeaturedSnippet {
     pub engine: Engine,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Answer {
-    #[serde(serialize_with = "serialize_markup")]
+    #[serde(
+        serialize_with = "serialize_markup",
+        deserialize_with = "deserialize_markup"
+    )]
     pub html: PreEscaped<String>,
     pub engine: Engine,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Infobox {
-    #[serde(serialize_with = "serialize_markup")]
+    #[serde(
+        serialize_with = "serialize_markup",
+        deserialize_with = "deserialize_markup"
+    )]
     pub html: PreEscaped<String>,
     pub engine: Engine,
 }
@@ -702,4 +855,11 @@ where
     S: serde::Serializer,
 {
     serializer.serialize_str(&markup.0)
+}
+
+fn deserialize_markup<'de, D>(deserializer: D) -> Result<PreEscaped<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(PreEscaped)
 }

@@ -1,8 +1,8 @@
 use std::{
     collections::HashMap,
-    fs,
+    env, fs,
     net::SocketAddr,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
 
@@ -33,6 +33,13 @@ impl Default for Config {
                     enabled: true,
                     max_download_size: 10_000_000,
                 },
+            },
+            cache: CacheConfig {
+                enabled: true,
+                dir: String::new(),
+                fresh_ttl_secs: 600,
+                stale_ttl_secs: 604800,
+                max_entries: 256,
             },
             engines: Arc::new(EnginesConfig::default()),
             urls: UrlsConfig {
@@ -96,6 +103,12 @@ impl Default for EnginesConfig {
             EngineConfig::new().with_weight(0.10).disabled(),
         );
 
+        // offline search (local kiwix-serve instance)
+        map.insert(
+            Engine::Kiwix,
+            EngineConfig::new().with_weight(0.30).disabled(),
+        );
+
         // calculators (give them a high weight so they're always the first thing in
         // autocomplete)
         map.insert(Engine::Numbat, EngineConfig::new().with_weight(10.0));
@@ -155,6 +168,7 @@ pub struct Config {
     pub api: bool,
     pub ui: UiConfig,
     pub image_search: ImageSearchConfig,
+    pub cache: CacheConfig,
     // wrapped in an arc to make Config cheaper to clone
     pub engines: Arc<EnginesConfig>,
     pub urls: UrlsConfig,
@@ -166,6 +180,7 @@ pub struct PartialConfig {
     pub api: Option<bool>,
     pub ui: Option<PartialUiConfig>,
     pub image_search: Option<PartialImageSearchConfig>,
+    pub cache: Option<PartialCacheConfig>,
     pub engines: Option<PartialEnginesConfig>,
     pub urls: Option<PartialUrlsConfig>,
 }
@@ -177,6 +192,7 @@ impl Config {
         self.ui.overlay(partial.ui.unwrap_or_default());
         self.image_search
             .overlay(partial.image_search.unwrap_or_default());
+        self.cache.overlay(partial.cache.unwrap_or_default());
         if let Some(partial_engines) = partial.engines {
             let mut engines = self.engines.as_ref().clone();
             engines.overlay(partial_engines);
@@ -275,6 +291,59 @@ impl ImageProxyConfig {
     pub fn overlay(&mut self, partial: PartialImageProxyConfig) {
         self.enabled = partial.enabled.unwrap_or(self.enabled);
         self.max_download_size = partial.max_download_size.unwrap_or(self.max_download_size);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CacheConfig {
+    /// Whether searches should be cached at all.
+    pub enabled: bool,
+    /// Directory to store cached searches in. If empty, the default cache
+    /// directory is used ($XDG_CACHE_HOME/metasearch or ~/.cache/metasearch).
+    pub dir: String,
+    /// How long cached results are served without contacting any engines, in
+    /// seconds.
+    pub fresh_ttl_secs: u64,
+    /// How long expired cached results may be served when every engine fails,
+    /// in seconds.
+    pub stale_ttl_secs: u64,
+    /// Maximum number of searches to keep in the cache.
+    pub max_entries: usize,
+}
+
+#[derive(Deserialize, Debug, Default)]
+pub struct PartialCacheConfig {
+    pub enabled: Option<bool>,
+    pub dir: Option<String>,
+    pub fresh_ttl_secs: Option<u64>,
+    pub stale_ttl_secs: Option<u64>,
+    pub max_entries: Option<usize>,
+}
+
+impl CacheConfig {
+    pub fn overlay(&mut self, partial: PartialCacheConfig) {
+        self.enabled = partial.enabled.unwrap_or(self.enabled);
+        self.dir = partial.dir.unwrap_or(self.dir.clone());
+        self.fresh_ttl_secs = partial.fresh_ttl_secs.unwrap_or(self.fresh_ttl_secs);
+        self.stale_ttl_secs = partial.stale_ttl_secs.unwrap_or(self.stale_ttl_secs);
+        self.max_entries = partial.max_entries.unwrap_or(self.max_entries);
+    }
+
+    #[must_use]
+    pub fn resolved_dir(&self) -> PathBuf {
+        if !self.dir.is_empty() {
+            return PathBuf::from(&self.dir);
+        }
+
+        let app_name = env!("CARGO_PKG_NAME");
+        if let Ok(xdg_cache_home) = env::var("XDG_CACHE_HOME") {
+            return PathBuf::from(xdg_cache_home).join(app_name);
+        }
+        if let Ok(home) = env::var("HOME") {
+            return PathBuf::from(home).join(".cache").join(app_name);
+        }
+
+        PathBuf::from(format!("{app_name}-cache"))
     }
 }
 

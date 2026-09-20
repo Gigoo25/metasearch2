@@ -16,6 +16,23 @@ api = false
 [engines]
 # numbat = false
 # fend = true
+# kiwix = true
+
+# optional: offline full-text search through a local kiwix-serve instance
+# (https://github.com/kiwix/kiwix-tools). The url must be reachable from both
+# the server and your browser.
+[engines.kiwix]
+# enabled = true
+# url = "http://127.0.0.1:8080"
+# book = "" # restrict search to one book by its kiwix name; empty means all books
+# page_length = 25
+
+[cache]
+# enabled = false
+# dir = "" # empty means $XDG_CACHE_HOME/metasearch or ~/.cache/metasearch
+# fresh_ttl_secs = 600 # serve cached results without contacting any engines
+# stale_ttl_secs = 604800 # serve cached results when every engine fails
+# max_entries = 256
 
 [urls.replace]
 # "www.reddit.com" = "old.reddit.com"
