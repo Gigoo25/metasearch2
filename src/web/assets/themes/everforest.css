@@ -1,0 +1,34 @@
+:root {
+  /* Everforest Dark Medium (https://github.com/sainnhe/everforest) */
+  /* body background */
+  --bg-1: #232a2e;
+  /* background of the content */
+  --bg-2: #2d353b;
+  /* input suggestions background */
+  --bg-3: #343f44;
+  /* mostly borders */
+  --bg-4: #4f585e;
+
+  /* main text color */
+  --fg-1: #d3c6aa;
+  /* search result description */
+  --fg-2: #9da9a0;
+  --fg-3: #859289;
+
+  /* focus outline */
+  --accent: #a7c080;
+
+  --link: #7fbbb3;
+  --link-visited: #d699b6;
+
+  /* green, success */
+  --positive: #a7c080;
+  /* red, error */
+  --negative: #e67e80;
+
+  --syntax-string: #a7c080;
+  --syntax-special: #e69875;
+  --syntax-constant: #d699b6;
+  --syntax-comment: #859289;
+  --syntax-func: #7fbbb3;
+}

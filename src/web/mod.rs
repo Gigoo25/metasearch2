@@ -87,6 +87,8 @@ pub async fn run(config: Config) {
         "themes/catppuccin-mocha.css",
         "themes/catppuccin-macchiato.css",
         "themes/catppuccin-latte.css",
+        "themes/everforest.css",
+        "themes/everforest-light.css",
         "themes/nord-bluish.css",
         "themes/discord.css"
     ];

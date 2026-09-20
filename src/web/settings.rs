@@ -36,6 +36,8 @@ pub async fn get(Extension(config): Extension<Config>) -> impl IntoResponse {
                                 { (theme_option("/themes/catppuccin-mocha.css", "Catppuccin Mocha")) }
                                 { (theme_option("/themes/catppuccin-macchiato.css", "Catppuccin Macchiato")) }
                                 { (theme_option("/themes/catppuccin-latte.css", "Catppuccin Latte")) }
+                                { (theme_option("/themes/everforest.css", "Everforest Dark")) }
+                                { (theme_option("/themes/everforest-light.css", "Everforest Light")) }
                                 { (theme_option("/themes/nord-bluish.css", "Nord Bluish")) }
                                 { (theme_option("/themes/discord.css", "Discord")) }
                             }
