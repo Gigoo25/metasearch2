@@ -1,6 +1,7 @@
 mod autocomplete;
 mod image_proxy;
 mod index;
+mod kiwix_proxy;
 mod opensearch;
 mod search;
 mod settings;
@@ -44,6 +45,13 @@ pub async fn run(config: Config) {
 
     let config = Arc::new(config);
 
+    // bring kiwix up in the background; searches wait on this without blocking
+    // the web ui from starting
+    tokio::spawn({
+        let config = config.clone();
+        async move { crate::engines::search::kiwix::ensure_ready(&config).await }
+    });
+
     fn static_route<S>(
         content: &'static str,
         content_type: &'static str,
@@ -63,6 +71,8 @@ pub async fn run(config: Config) {
         .route("/opensearch.xml", get(opensearch::route))
         .route("/autocomplete", get(autocomplete::route))
         .route("/image-proxy", get(image_proxy::route))
+        .route("/kiwix", get(kiwix_proxy::route))
+        .route("/kiwix/{*path}", get(kiwix_proxy::route))
         .layer(middleware::from_fn_with_state(
             config.clone(),
             config_middleware,

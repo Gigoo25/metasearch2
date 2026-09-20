@@ -1,0 +1,16 @@
+# Default config for the bundled container image.
+#
+# kiwix-serve runs inside the same container on loopback and is reverse-proxied
+# at /kiwix, so kiwix links are relative and the whole deployment is on one
+# port. ZIM files are read from /zim and the search cache lives in /cache.
+
+bind = "0.0.0.0:28019"
+
+[engines.kiwix]
+enabled = true
+url = "http://127.0.0.1:8090/kiwix"
+# keep kiwix's own relative /kiwix/... links instead of pointing at `url`
+public_url = ""
+
+[cache]
+dir = "/cache"

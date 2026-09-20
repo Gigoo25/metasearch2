@@ -59,6 +59,46 @@ options you may want to change are:
     modify this if you prefer the results from certain engines.
 
 --------
+OFFLINE
+--------
+
+metasearch can keep serving searches when the machine it runs on has no
+internet access:
+
+  - Successful searches are cached on disk and can be served again without
+    contacting any engine. Fresh entries are served immediately; expired
+    entries are served when every engine that needs the network fails. Answers
+    that depend on the requester (ip, user agent) or the current time are never
+    cached. The cache is enabled by default and can be configured or disabled
+    under `[cache]`. On systemd setups you probably want to set `cache.dir` to
+    a persistent path.
+  - ZIM archives (offline Wikipedia and friends) can be searched too. The
+    container image bundles kiwix-serve; it runs on loopback and is
+    reverse-proxied at /kiwix, so one container on one port serves everything.
+    Put ZIM files in the `./zim` directory (subdirectories are fine), then:
+
+        docker compose up --build
+
+    The directory is scanned at container startup. To add a ZIM without
+    restarting the container:
+
+        docker exec <container> kiwix-manage /cache/kiwix-library.xml add /zim/new.zim
+
+    (the library is rebuilt from `./zim` on the next start). A ZIM needs a
+    fulltext index to be searchable; most wikipedia mini/maxi archives have
+    one.
+
+Making your own ZIM from a website with [zimit](https://github.com/openzim/zimit):
+
+    mkdir -p zim
+    docker run --rm -v "$PWD/zim:/output" ghcr.io/openzim/zimit \
+      zimit --seeds https://example.com --name example
+    docker compose restart metasearch2
+
+Prebuilt corpora are available at https://library.kiwix.org. zimit is not part
+of the metasearch image because it needs a headless browser.
+
+--------
 JSON API
 --------
 

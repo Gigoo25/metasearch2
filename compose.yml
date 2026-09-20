@@ -8,4 +8,12 @@ services:
       context: .
       dockerfile: Containerfile
     network_mode: "host"
+    volumes:
+      # drop ZIM archives here (e.g. produced by zimit)
+      - ./zim:/zim:ro
+      # search cache and kiwix library; survives container restarts
+      - metasearch-cache:/cache
     restart: unless-stopped
+
+volumes:
+  metasearch-cache:
