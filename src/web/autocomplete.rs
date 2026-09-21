@@ -15,8 +15,9 @@ use crate::{config::Config, engines};
 const CACHE_TTL: Duration = Duration::from_secs(60);
 const CACHE_MAX: usize = 256;
 
-static CACHE: LazyLock<Mutex<HashMap<String, (Instant, Vec<String>)>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+type Cache = Mutex<HashMap<String, (Instant, Vec<String>)>>;
+
+static CACHE: LazyLock<Cache> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn cache_get(query: &str) -> Option<Vec<String>> {
     let mut cache = CACHE.lock();
