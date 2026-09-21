@@ -65,13 +65,13 @@ OFFLINE
 metasearch can keep serving searches when the machine it runs on has no
 internet access:
 
-  - Successful searches are cached on disk and can be served again without
-    contacting any engine. Fresh entries are served immediately; expired
-    entries are served when every engine that needs the network fails. Answers
-    that depend on the requester (ip, user agent) or the current time are never
-    cached. The cache is enabled by default and can be configured or disabled
-    under `[cache]`. On systemd setups you probably want to set `cache.dir` to
-    a persistent path.
+  - Successful searches are cached in the local sqlite database and can be
+    served again without contacting any engine. Fresh entries are served
+    immediately; expired entries are served when every engine that needs the
+    network fails. Answers that depend on the requester (ip, user agent) or
+    the current time are never cached. The cache is enabled by default and can
+    be configured or disabled under `[cache]`. On systemd/container setups set
+    `[database] path` to a persistent path so the cache and index survive.
   - ZIM archives (offline Wikipedia and friends) can be searched too. The
     container image bundles kiwix-serve; it runs on loopback and is
     reverse-proxied at /kiwix, so one container on one port serves everything.
@@ -97,6 +97,33 @@ Making your own ZIM from a website with [zimit](https://github.com/openzim/zimit
 
 Prebuilt corpora are available at https://library.kiwix.org. zimit is not part
 of the metasearch image because it needs a headless browser.
+
+--------------------------
+SITE RULES AND LOCAL INDEX
+--------------------------
+
+metasearch keeps a local sqlite database (`[database]`, by default
+`$XDG_CACHE_HOME/metasearch/metasearch.db`) with three things:
+
+  - The search response cache (see the offline section above).
+  - Site rules: raise, lower or hide a domain from the "ranking" menu under
+    each search result. Rules are subdomain-aware score multipliers, listed
+    on the settings page, where individual rules can be undone (that also
+    un-hides a domain) or cleared. Theme and custom CSS live there too.
+  - The personal index: every result of a search is recorded and can be
+    searched again later through the `index` engine, even when the network is
+    down. `[database] max_results` and `max_age_days` bound the index; the
+    oldest and least recently seen results are pruned automatically.
+
+The rules and index are stored per instance, not per browser.
+
+The database runs in WAL mode with immediate write transactions. At startup it
+runs `PRAGMA quick_check`: a corrupt file is moved aside as
+`metasearch.db.corrupt-*` and the instance starts fresh instead of refusing to
+start. Pending schema migrations back up the database to
+`metasearch.db.pre-migration.bak` first, and `synchronous = "full"` (default)
+fsyncs every commit. Keep the database on local disk; sqlite locking is not
+reliable on some network filesystems.
 
 --------
 JSON API

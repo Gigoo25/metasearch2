@@ -27,10 +27,16 @@ api = false
 
 [cache]
 # enabled = false
-# dir = ""
 # fresh_ttl_secs = 600
 # stale_ttl_secs = 604800
 # max_entries = 256
+
+[database]
+# path = ""
+# max_results = 200000
+# max_age_days = 180
+# synchronous = "full" # "normal" is faster but may lose recent writes on power loss
+# quick_check = true
 
 [urls.replace]
 # "www.reddit.com" = "old.reddit.com"

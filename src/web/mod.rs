@@ -16,9 +16,8 @@ use axum::{
     routing::{get, post, MethodRouter},
     Router,
 };
-use axum_extra::extract::CookieJar;
 use maud::{html, Markup, PreEscaped};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::config::Config;
 
@@ -42,6 +41,16 @@ macro_rules! register_static_routes {
 
 pub async fn run(config: Config) {
     let bind_addr = config.bind;
+
+    if let Err(err) = crate::db::init(
+        &config.database.resolved_path(),
+        config.database.max_results,
+        config.database.max_age_days,
+        &config.database.synchronous,
+        config.database.quick_check,
+    ) {
+        error!("Failed to open the index database: {err}");
+    }
 
     let config = Arc::new(config);
 
@@ -68,6 +77,7 @@ pub async fn run(config: Config) {
         .route("/search", get(search::get))
         .route("/settings", get(settings::get))
         .route("/settings", post(settings::post))
+        .route("/settings/site-rule", post(settings::site_rule))
         .route("/opensearch.xml", get(opensearch::route))
         .route("/autocomplete", get(autocomplete::route))
         .route("/image-proxy", get(image_proxy::route))
@@ -121,19 +131,19 @@ fn guess_mime_type(path: &str) -> &'static str {
 
 async fn config_middleware(
     State(config): State<Arc<Config>>,
-    cookies: CookieJar,
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
     let mut config = config.clone().as_ref().clone();
 
-    let settings_cookie = cookies.get("settings");
-    if let Some(settings_cookie) = settings_cookie {
-        if let Ok(settings) = serde_json::from_str::<settings::Settings>(settings_cookie.value()) {
+    if let Some(settings_json) = crate::db::setting("ui") {
+        if let Ok(settings) = serde_json::from_str::<settings::Settings>(&settings_json) {
             config.ui.stylesheet_url = settings.stylesheet_url;
             config.ui.stylesheet_str = settings.stylesheet_str;
         }
     }
+
+    config.site_rules = crate::db::site_rules();
 
     // modify the state
     req.extensions_mut().insert(config);

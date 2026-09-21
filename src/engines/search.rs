@@ -3,6 +3,7 @@ pub mod brave;
 pub mod duckduckgo;
 pub mod google;
 pub mod google_scholar;
+pub mod index;
 pub mod kiwix;
 pub mod marginalia;
 pub mod mwmbl;

@@ -1,16 +1,18 @@
-//! Disk-persisted cache of merged search results.
+//! Cache of merged search responses, stored in the sqlite database alongside
+//! the personal index.
 //!
 //! Entries are keyed by the normalized query, the search tab and a fingerprint
-//! of the config that affects result ranking (engines and url rules), so
-//! editing the config doesn't serve results ranked with the old settings.
+//! of the config that affects result ranking (engines, url rules and site
+//! rules), so editing the config doesn't serve results ranked with the old
+//! settings.
 //!
 //! Fresh entries are served without contacting any engine. Expired entries may
 //! still be served when every engine fails (which is what happens when the
-//! machine has no internet access).
+//! machine has no internet access), and entries older than the stale window
+//! are dropped along with the index's own retention pass.
 
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
-    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -18,13 +20,24 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use super::{Engine, Infobox, ResponseForTab, SearchTab};
-use crate::config::{CacheConfig, Config};
+use crate::{
+    config::{CacheConfig, Config},
+    db,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CacheKey {
     pub query: String,
     pub tab: SearchTab,
     pub config_hash: u64,
+}
+
+impl CacheKey {
+    fn database_key(&self) -> String {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,6 +66,11 @@ pub fn config_fingerprint(config: &Config) -> u64 {
     let mut hasher = DefaultHasher::new();
 
     RANKING_VERSION.hash(&mut hasher);
+
+    for rule in &config.site_rules {
+        rule.host.hash(&mut hasher);
+        rule.weight.to_bits().hash(&mut hasher);
+    }
 
     let mut engines: Vec<_> = config.engines.map.iter().collect();
     engines.sort_by_key(|(engine, _)| **engine);
@@ -122,13 +140,18 @@ pub async fn load(config: &CacheConfig, key: &CacheKey) -> Option<CachedSearch> 
         return None;
     }
 
-    let path = path_for(&config.resolved_dir(), key);
-    let bytes = tokio::fs::read(&path).await.ok()?;
-    match serde_json::from_slice::<CachedSearch>(&bytes) {
+    let database_key = key.database_key();
+    let cleanup_key = database_key.clone();
+    let stored = tokio::task::spawn_blocking(move || db::cache_get(&database_key))
+        .await
+        .ok()?
+        .ok()??;
+
+    match serde_json::from_str::<CachedSearch>(&stored.response) {
         Ok(entry) => Some(entry),
         Err(err) => {
-            warn!("Failed to read cached search {path:?}: {err}");
-            let _ = tokio::fs::remove_file(&path).await;
+            warn!("Failed to read cached search: {err}");
+            let _ = db::cache_delete(&cleanup_key);
             None
         }
     }
@@ -144,18 +167,12 @@ pub async fn store(
         return;
     }
 
-    let dir = config.resolved_dir();
-    if let Err(err) = tokio::fs::create_dir_all(&dir).await {
-        warn!("Failed to create cache directory {dir:?}: {err}");
-        return;
-    }
-
     let entry = CachedSearch {
         stored_at: now_unix(),
         response,
         infobox,
     };
-    let json = match serde_json::to_vec(&entry) {
+    let json = match serde_json::to_string(&entry) {
         Ok(json) => json,
         Err(err) => {
             warn!("Failed to serialize cached search: {err}");
@@ -163,60 +180,20 @@ pub async fn store(
         }
     };
 
-    // write to a temporary file first so a crash doesn't leave a half-written
-    // entry behind
-    let path = path_for(&dir, key);
-    let tmp_path = path.with_extension("json.tmp");
-    if let Err(err) = tokio::fs::write(&tmp_path, &json).await {
-        warn!("Failed to write cached search {tmp_path:?}: {err}");
-        return;
-    }
-    if let Err(err) = tokio::fs::rename(&tmp_path, &path).await {
-        warn!("Failed to move cached search into place {path:?}: {err}");
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return;
-    }
+    let database_key = key.database_key();
+    let max_entries = config.max_entries as u64;
+    let stale_ttl_secs = config.stale_ttl_secs;
+    let result = tokio::task::spawn_blocking(move || {
+        db::cache_put(&database_key, &json)?;
+        db::cache_evict(max_entries, stale_ttl_secs)
+    })
+    .await;
 
-    evict(&dir, config.max_entries).await;
-}
-
-async fn evict(dir: &Path, max_entries: usize) {
-    if max_entries == 0 {
-        return;
+    match result {
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => warn!("Failed to store cached search: {err}"),
+        Err(err) => warn!("Cache task failed: {err}"),
     }
-
-    let mut entries = Vec::new();
-    let Ok(mut read_dir) = tokio::fs::read_dir(dir).await else {
-        return;
-    };
-    while let Ok(Some(entry)) = read_dir.next_entry().await {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            let modified = entry
-                .metadata()
-                .await
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(UNIX_EPOCH);
-            entries.push((modified, path));
-        }
-    }
-
-    if entries.len() <= max_entries {
-        return;
-    }
-
-    entries.sort_by_key(|(modified, _)| *modified);
-    for (_, path) in entries.iter().take(entries.len() - max_entries) {
-        if let Err(err) = tokio::fs::remove_file(path).await {
-            warn!("Failed to evict cached search {path:?}: {err}");
-        }
-    }
-}
-
-fn path_for(dir: &Path, key: &CacheKey) -> PathBuf {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    dir.join(format!("{:016x}.json", hasher.finish()))
 }
 
 fn now_unix() -> u64 {
@@ -229,33 +206,31 @@ fn now_unix() -> u64 {
 mod tests {
     use std::sync::Arc;
 
-    use maud::PreEscaped;
-
     use super::*;
-    use crate::engines::{Answer, EngineSearchResult, Response, SearchResult};
-
-    fn test_dir(name: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("metasearch-cache-test-{name}-{unique}"))
-    }
-
-    fn test_config(dir: &Path) -> CacheConfig {
-        CacheConfig {
-            enabled: true,
-            dir: dir.to_string_lossy().into_owned(),
-            fresh_ttl_secs: 600,
-            stale_ttl_secs: 604800,
-            max_entries: 10,
-        }
-    }
 
     #[test]
     fn normalizes_whitespace() {
         assert_eq!(normalize_query("  ray \n charles "), "ray charles");
         assert_eq!(normalize_query("ray charles"), "ray charles");
+    }
+
+    #[test]
+    fn database_keys_are_stable() {
+        let key = CacheKey {
+            query: "ray charles".to_string(),
+            tab: SearchTab::All,
+            config_hash: 1,
+        };
+        assert_eq!(key.database_key(), key.database_key());
+        assert_ne!(
+            key.database_key(),
+            CacheKey {
+                query: "ray charles".to_string(),
+                tab: SearchTab::Images,
+                config_hash: 1,
+            }
+            .database_key()
+        );
     }
 
     #[test]
@@ -269,82 +244,5 @@ mod tests {
         engines.map.get_mut(&Engine::Google).unwrap().weight = 99.0;
         changed.engines = Arc::new(engines);
         assert_ne!(fingerprint, config_fingerprint(&changed));
-    }
-
-    #[tokio::test]
-    async fn store_and_load_roundtrip() {
-        let dir = test_dir("roundtrip");
-        let config = test_config(&dir);
-        let key = CacheKey {
-            query: "ray charles".to_string(),
-            tab: SearchTab::All,
-            config_hash: 1,
-        };
-        let response = ResponseForTab::All(Response {
-            search_results: vec![SearchResult {
-                result: EngineSearchResult {
-                    url: "http://localhost:8080/content/zimfile/A/Article".to_string(),
-                    title: "Article".to_string(),
-                    description: "description".to_string(),
-                },
-                engines: [Engine::Kiwix].into_iter().collect(),
-                score: 1.0,
-            }],
-            featured_snippet: None,
-            answer: Some(Answer {
-                html: PreEscaped("<b>42</b>".to_string()),
-                engine: Engine::Numbat,
-            }),
-            infobox: None,
-            config: Arc::new(Config::default()),
-        });
-
-        assert!(load(&config, &key).await.is_none());
-        store(&config, &key, response, None).await;
-
-        let entry = load(&config, &key).await.expect("cache entry");
-        assert!(age_secs(&entry) <= 1);
-        let ResponseForTab::All(response) = entry.response else {
-            panic!("expected an 'all' response");
-        };
-        assert_eq!(response.search_results.len(), 1);
-        assert!(response.search_results[0].engines.contains(&Engine::Kiwix));
-        assert_eq!(response.answer.expect("answer").engine, Engine::Numbat);
-
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-    }
-
-    #[tokio::test]
-    async fn evicts_old_entries() {
-        let dir = test_dir("evict");
-        let mut config = test_config(&dir);
-        config.max_entries = 1;
-
-        for i in 0..3u64 {
-            let key = CacheKey {
-                query: format!("query {i}"),
-                tab: SearchTab::All,
-                config_hash: i,
-            };
-            let response = ResponseForTab::All(Response {
-                search_results: vec![],
-                featured_snippet: None,
-                answer: None,
-                infobox: None,
-                config: Arc::new(Config::default()),
-            });
-            store(&config, &key, response, None).await;
-        }
-
-        let mut count = 0;
-        let mut read_dir = tokio::fs::read_dir(&dir).await.unwrap();
-        while let Ok(Some(entry)) = read_dir.next_entry().await {
-            if entry.path().extension().and_then(|ext| ext.to_str()) == Some("json") {
-                count += 1;
-            }
-        }
-        assert_eq!(count, 1);
-
-        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

@@ -11,7 +11,7 @@ Commits at the time of writing:
 
 ## What is implemented
 
-### Search result cache (`src/engines/cache.rs`)
+### Search result cache (`src/engines/cache.rs`, `src/db.rs`)
 
 - Caches the merged response (results, featured snippet, answer, infobox) plus
   the post-search infobox, keyed by normalized query + tab + a deterministic
@@ -21,8 +21,10 @@ Commits at the time of writing:
 - `is_cacheable` refuses answers from request/time-dependent engines (`ip`,
   `useragent`, `timezone`, `fend`), and responses from runs where all network
   engines failed are never stored (prevents offline runs from poisoning it).
-- JSON files in `cache.dir` (`$XDG_CACHE_HOME/metasearch` by default, `/cache`
-  in the container), atomic writes, LRU-by-mtime eviction (`max_entries`).
+- Entries live in the `response_cache` table of the sqlite database
+  (`[cache] max_entries` caps the table, SQL eviction). The database path is
+  `[database] path` — `$XDG_CACHE_HOME/metasearch/metasearch.db` by default,
+  `/cache/metasearch.db` in the container (a docker volume).
 
 ### Kiwix engine (`src/engines/search/kiwix.rs`)
 
@@ -53,7 +55,10 @@ Commits at the time of writing:
   the configured kiwix URL (streaming body; forwards content-type/etag/
   last-modified/cache-control/content-disposition). No `Range` support.
 - `config-container.toml` enables kiwix with `url = "http://127.0.0.1:8090/kiwix"`
-  and `public_url = ""`, and puts the cache in `/cache`.
+  and `public_url = ""`, and sets
+  `[database] path = "/cache/metasearch.db"` so the personal index, result
+  cache, settings and ranking rules survive container restarts and rebuilds.
+  The app logs the resolved path at startup (`database: ...`).
 - `compose.yml` mounts `./zim:/zim:ro` and the `metasearch-cache` volume.
 
 ### Themes

@@ -41,6 +41,7 @@ engines! {
     Marginalia = "marginalia",
     Mwmbl = "mwmbl",
     Wiby = "wiby",
+    Index = "index",
     Kiwix = "kiwix",
     // answer
     Dictionary = "dictionary",
@@ -70,6 +71,7 @@ engine_requests! {
     Marginalia => search::marginalia::request, parse_response,
     Mwmbl => search::mwmbl::request, parse_response,
     Wiby => search::wiby::request, parse_response,
+    Index => search::index::request, None,
     Kiwix => search::kiwix::request, parse_with_config,
     // answer
     Dictionary => answer::dictionary::request, parse_response,
@@ -583,10 +585,13 @@ async fn make_requests(
             }
         }
 
-        let postsearch_responses_result: eyre::Result<HashMap<_, _>> =
-            join_all(postsearch_requests).await.into_iter().collect();
-        let postsearch_responses = postsearch_responses_result?;
+        let postsearch_responses = join_all(postsearch_requests)
+            .await
+            .into_iter()
+            .collect::<eyre::Result<Vec<_>>>()?;
 
+        // engines are tried in Engine::all() order, so the first infobox in
+        // that order wins
         for (engine, response) in postsearch_responses {
             if let Some(html) = response {
                 let infobox = Infobox { html, engine };
@@ -774,6 +779,33 @@ pub async fn search(
     };
 
     if let Some(served) = served {
+        // everything that was served live goes into the personal index
+        if let ResponseForTab::All(response) = &served.response {
+            let indexed_results: Vec<crate::db::IndexedResult> = response
+                .search_results
+                .iter()
+                .take(50)
+                .map(|result| crate::db::IndexedResult {
+                    url: result.result.url.clone(),
+                    title: result.result.title.clone(),
+                    description: result.result.description.clone(),
+                    engines: result
+                        .engines
+                        .iter()
+                        .map(|engine| engine.id().to_string())
+                        .collect(),
+                })
+                .collect();
+            if !indexed_results.is_empty() {
+                let query_text = query.query.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(err) = crate::db::record_search(&query_text, &indexed_results) {
+                        error!("failed to record results in the index: {err}");
+                    }
+                });
+            }
+        }
+
         if served.cacheable && cache::is_cacheable(&served.response) {
             cache::store(cache_config, &cache_key, served.response, served.infobox).await;
         }

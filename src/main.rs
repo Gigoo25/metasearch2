@@ -7,6 +7,7 @@ use config::Config;
 use tracing::error;
 
 pub mod config;
+pub mod db;
 pub mod engines;
 pub mod parse;
 pub mod urls;

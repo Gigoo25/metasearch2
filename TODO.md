@@ -7,20 +7,21 @@ notes and the zimit design live in `HANDOFF.md`.
 
 ### Kagi-inspired features
 
-- [ ] Custom domain ranking (raise / lower)
-  - A control in each search result to raise or lower a domain, applied as a
-    score multiplier like the existing `[urls.weight]` rules
-    (`src/engines/ranking.rs`, `src/urls.rs`), plus a management list in
-    Settings.
-  - Storage: extend the `settings` cookie (size-limited, per-client) or keep
-    rules instance-side.
-  - Optional domain leaderboard of aggregate votes: opt-in/anonymous, hosted
-    vs local-only undecided.
-  - Must work for both web and kiwix results.
+- [ ] Custom domain ranking (raise / lower) — implemented, pending confirmation
+  - A "ranking" menu under each result has plain HTML raise/lower/hide forms
+    (no JavaScript); posting redirects back to the same search page.
+  - Rules live in sqlite (`site_rules`) as subdomain-aware score multipliers.
+    The settings page lists them with a per-rule *undo* form, an add form and
+    a clear-all, so hiding a domain is reversible.
+  - Kiwix results are keyed by ZIM book (`kiwix:<book>`) and can be sorted the
+    same way; they are never hidden, only strongly demoted (weight 0 → 0.05).
+  - Verified locally and in the container: hide removes the domain, undo
+    restores it, raising `linuxmint.com` moved it from #3 to #1.
+  - Optional domain leaderboard of aggregate votes is still open.
 
 - [ ] Safe search
-  - Levels off / moderate / strict, default off; Settings toggle and a
-    `[safe_search]` config section.
+  - Levels off / moderate / strict, default off; HTML checkbox in Settings,
+    stored in the database (`settings` table) like the theme.
   - Engine side: pass each engine's safe parameter (Bing `adlt=strict`, Brave
     `safesearch=strict`, ...).
   - Local side: domain blocklist plus keyword filtering of titles and
@@ -31,9 +32,26 @@ notes and the zimit design live in `HANDOFF.md`.
   - Remaining: preset lists of big domains to demote/hide and small-web sites
     to boost, exposed as a Settings toggle (`[urls.weight]` defaults).
   - Consider a "small web only" mode that hides the big-platform list.
+  - Reference list for later: <https://github.com/kagisearch/smallweb> (small
+    web sites/directory to seed the boost list).
 
 - Candidates: bangs (`!w`), keyword site boosts (`+term`), pinned sites,
   up/down votes feeding personal ranking.
+
+### Postsearch infoboxes
+
+- [ ] Infoboxes show more often — implemented, pending confirmation
+  - Triggers scan the top 30 results (was 8), and engines are tried in a
+    stable `Engine::all()` order instead of hash order, so which infobox wins
+    is deterministic.
+  - MDN was broken: the page moved from `header > h1`/`.section-content` to
+    `h1`/`section.content-section`, and locale-less urls
+    (`developer.mozilla.org/Web/API/...`) are now accepted too.
+  - Empty-url results (wiby) are skipped in the shared parser instead of being
+    recorded and logging `url is empty`.
+  - Verified in the container: `javascript fetch api guide` now shows the MDN
+    infobox, `minecraft redstone comparator` the minecraft one; 0 empty-url
+    warnings since.
 
 ### Pagination
 
@@ -53,22 +71,43 @@ notes and the zimit design live in `HANDOFF.md`.
 
 ### Personal result index
 
-- [ ] Build a growing index from search results
-  - Every search already produces merged results; record them durably so the
-    instance builds its own index over time instead of only caching per query.
-  - Store per result: url, title, description, engines, first/last seen and the
-    queries it appeared for. Dedupe by normalized URL and keep the newest
-    metadata.
-  - Serving: a personal/index engine that matches queries against the stored
-    results (exact query first, then term overlap); useful offline and as
-    context for the LLM answers.
-  - Storage: extend the JSON cache into a durable store, or add SQLite (FTS5)
-    if term search grows. Needs retention/size limits and a config toggle
-    (privacy: this stores queries long-term).
-  - Extras: visit/click counts feeding personal ranking, "seen before"
-    markers, export/import of the index.
-  - Open questions: storage backend, retention policy, shared vs per-client
-    index.
+- [ ] Build a growing index from search results — implemented (v1), pending
+  confirmation
+  - sqlite + FTS5 (external content with triggers); one transaction per search
+    records url/title/description/engines, bumps `seen_count` and links the
+    query. Retention: `[database] max_results` plus `max_age_days` (default
+    180) for entries not seen recently.
+  - A new `index` engine (weight 0.30) matches queries against it, so offline
+    searches and previously seen pages still return something.
+  - Verified: 20k-row FTS test search under 1s; the container returns 20 index
+    results for an uncached query after a related search.
+  - Still open: click/visit counts feeding ranking, export/import, per-client
+    vs shared (currently shared).
+
+### Storage
+
+- [x] One sqlite database for everything — implemented, pending confirmation
+  - The result cache moved from json files into a `response_cache` table
+    (same TTL semantics, SQL eviction); `[cache] dir` is gone and
+    `[database] path` is the only location.
+  - `config-container.toml` sets `path = "/cache/metasearch.db"` so the
+    database sits on the persistent `/cache` volume; the resolved path is
+    logged at startup. (Before this fix it defaulted to the container's
+    ephemeral `/root/.cache`, which lost settings and cache on every
+    restart.)
+  - Theme and custom CSS moved from the `settings` cookie into a `settings`
+    table; the settings page is plain HTML forms, no JavaScript.
+  - Schema changes are `PRAGMA user_version` migrations; old `<hash>.json`
+    cache files are inert and can be deleted from the data directory.
+  - Durability: WAL, `[database] synchronous` (default `full`, i.e. fsync per
+    commit), 8 MiB journal size limit and Immediate transactions for writes.
+  - Startup `PRAGMA quick_check` (toggle `[database] quick_check`) quarantines
+    an unopenable or corrupt database as `metasearch.db.corrupt-<ts>` (plus
+    `-wal`/`-shm`) and starts fresh instead of failing.
+  - Pending migrations are protected by a pre-migration backup copy
+    (`metasearch.db.pre-migration.bak`) taken with sqlite's backup API.
+  - The database is meant to live on local disk with a single writer
+    instance; running two instances on one file is unsupported.
 
 ### LLM answers
 

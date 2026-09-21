@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::engines::Engine;
@@ -36,7 +36,6 @@ impl Default for Config {
             },
             cache: CacheConfig {
                 enabled: true,
-                dir: String::new(),
                 fresh_ttl_secs: 600,
                 stale_ttl_secs: 604800,
                 max_entries: 256,
@@ -49,6 +48,8 @@ impl Default for Config {
                 )],
                 weight: vec![],
             },
+            database: DatabaseConfig::default(),
+            site_rules: vec![],
         }
     }
 }
@@ -94,6 +95,9 @@ impl Default for EnginesConfig {
         // small-web search engines (low weights: small and quirky indexes)
         map.insert(Engine::Mwmbl, EngineConfig::new().with_weight(0.15));
         map.insert(Engine::Wiby, EngineConfig::new().with_weight(0.10));
+
+        // personal result index built from previous searches
+        map.insert(Engine::Index, EngineConfig::new().with_weight(0.30));
 
         // additional search engines
         map.insert(
@@ -167,9 +171,89 @@ pub struct Config {
     pub ui: UiConfig,
     pub image_search: ImageSearchConfig,
     pub cache: CacheConfig,
+    pub database: DatabaseConfig,
     // wrapped in an arc to make Config cheaper to clone
     pub engines: Arc<EnginesConfig>,
     pub urls: UrlsConfig,
+    /// Site rules loaded from the database, not the config file.
+    pub site_rules: Vec<SiteRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SiteRule {
+    pub host: String,
+    pub weight: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatabaseConfig {
+    /// Path of the sqlite database. Empty means `<cache dir>/metasearch.db`.
+    pub path: String,
+    /// Maximum number of indexed results to keep; oldest are pruned.
+    pub max_results: u64,
+    /// Drop index entries that were not seen for this many days. 0 disables
+    /// age-based expiry.
+    pub max_age_days: u64,
+    /// `full` (default) fsyncs every commit; `normal` is faster but may lose
+    /// the most recent writes on power loss (WAL mode stays corruption-safe).
+    pub synchronous: String,
+    /// Run `PRAGMA quick_check` at startup and quarantine a corrupt database.
+    pub quick_check: bool,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            max_results: 200_000,
+            max_age_days: 180,
+            synchronous: "full".to_string(),
+            quick_check: true,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Default)]
+pub struct PartialDatabaseConfig {
+    pub path: Option<String>,
+    pub max_results: Option<u64>,
+    pub max_age_days: Option<u64>,
+    pub synchronous: Option<String>,
+    pub quick_check: Option<bool>,
+}
+
+impl DatabaseConfig {
+    pub fn overlay(&mut self, partial: PartialDatabaseConfig) {
+        self.path = partial.path.unwrap_or(self.path.clone());
+        self.max_results = partial.max_results.unwrap_or(self.max_results);
+        self.max_age_days = partial.max_age_days.unwrap_or(self.max_age_days);
+        self.synchronous = partial.synchronous.unwrap_or(self.synchronous.clone());
+        self.quick_check = partial.quick_check.unwrap_or(self.quick_check);
+    }
+
+    #[must_use]
+    pub fn resolved_path(&self) -> PathBuf {
+        if !self.path.is_empty() {
+            return PathBuf::from(&self.path);
+        }
+        default_data_dir().join("metasearch.db")
+    }
+}
+
+impl Config {
+    /// Weight multiplier for a host from the site rules. A rule matches the
+    /// host itself and its subdomains.
+    #[must_use]
+    pub fn site_rule_weight(&self, host: &str) -> Option<f64> {
+        let host = host.to_lowercase();
+        self.site_rules.iter().rev().find_map(|rule| {
+            let rule_host = rule.host.trim_start_matches('.').to_lowercase();
+            if rule_host.is_empty() {
+                return None;
+            }
+            (host == rule_host || host.ends_with(&format!(".{rule_host}"))).then_some(rule.weight)
+        })
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -179,6 +263,7 @@ pub struct PartialConfig {
     pub ui: Option<PartialUiConfig>,
     pub image_search: Option<PartialImageSearchConfig>,
     pub cache: Option<PartialCacheConfig>,
+    pub database: Option<PartialDatabaseConfig>,
     pub engines: Option<PartialEnginesConfig>,
     pub urls: Option<PartialUrlsConfig>,
 }
@@ -191,6 +276,7 @@ impl Config {
         self.image_search
             .overlay(partial.image_search.unwrap_or_default());
         self.cache.overlay(partial.cache.unwrap_or_default());
+        self.database.overlay(partial.database.unwrap_or_default());
         if let Some(partial_engines) = partial.engines {
             let mut engines = self.engines.as_ref().clone();
             engines.overlay(partial_engines);
@@ -296,9 +382,6 @@ impl ImageProxyConfig {
 pub struct CacheConfig {
     /// Whether searches should be cached at all.
     pub enabled: bool,
-    /// Directory to store cached searches in. If empty, the default cache
-    /// directory is used ($XDG_CACHE_HOME/metasearch or ~/.cache/metasearch).
-    pub dir: String,
     /// How long cached results are served without contacting any engines, in
     /// seconds.
     pub fresh_ttl_secs: u64,
@@ -312,7 +395,6 @@ pub struct CacheConfig {
 #[derive(Deserialize, Debug, Default)]
 pub struct PartialCacheConfig {
     pub enabled: Option<bool>,
-    pub dir: Option<String>,
     pub fresh_ttl_secs: Option<u64>,
     pub stale_ttl_secs: Option<u64>,
     pub max_entries: Option<usize>,
@@ -321,28 +403,24 @@ pub struct PartialCacheConfig {
 impl CacheConfig {
     pub fn overlay(&mut self, partial: PartialCacheConfig) {
         self.enabled = partial.enabled.unwrap_or(self.enabled);
-        self.dir = partial.dir.unwrap_or(self.dir.clone());
         self.fresh_ttl_secs = partial.fresh_ttl_secs.unwrap_or(self.fresh_ttl_secs);
         self.stale_ttl_secs = partial.stale_ttl_secs.unwrap_or(self.stale_ttl_secs);
         self.max_entries = partial.max_entries.unwrap_or(self.max_entries);
     }
+}
 
-    #[must_use]
-    pub fn resolved_dir(&self) -> PathBuf {
-        if !self.dir.is_empty() {
-            return PathBuf::from(&self.dir);
-        }
-
-        let app_name = env!("CARGO_PKG_NAME");
-        if let Ok(xdg_cache_home) = env::var("XDG_CACHE_HOME") {
-            return PathBuf::from(xdg_cache_home).join(app_name);
-        }
-        if let Ok(home) = env::var("HOME") {
-            return PathBuf::from(home).join(".cache").join(app_name);
-        }
-
-        PathBuf::from(format!("{app_name}-cache"))
+/// Default directory for the database (and anything else that needs to persist
+/// between runs).
+#[must_use]
+pub fn default_data_dir() -> PathBuf {
+    let app_name = env!("CARGO_PKG_NAME");
+    if let Ok(xdg_cache_home) = env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg_cache_home).join(app_name);
     }
+    if let Ok(home) = env::var("HOME") {
+        return PathBuf::from(home).join(".cache").join(app_name);
+    }
+    PathBuf::from(format!("{app_name}-data"))
 }
 
 #[derive(Debug, Clone)]
@@ -485,5 +563,33 @@ impl UrlsConfig {
             let b_len = b.path.len() + b.host.len();
             b_len.cmp(&a_len)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn site_rule_weight_matches_host_and_subdomains() {
+        let config = Config {
+            site_rules: vec![
+                SiteRule {
+                    host: "example.com".to_string(),
+                    weight: 2.0,
+                },
+                SiteRule {
+                    host: ".spam.example".to_string(),
+                    weight: 0.0,
+                },
+            ],
+            ..Config::default()
+        };
+
+        assert_eq!(config.site_rule_weight("example.com"), Some(2.0));
+        assert_eq!(config.site_rule_weight("www.example.com"), Some(2.0));
+        assert_eq!(config.site_rule_weight("spam.example"), Some(0.0));
+        assert_eq!(config.site_rule_weight("notexample.com"), None);
+        assert_eq!(config.site_rule_weight("example.org"), None);
     }
 }
