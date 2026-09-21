@@ -2,12 +2,25 @@ use maud::{html, PreEscaped};
 use scraper::{Html, Selector};
 use url::Url;
 
-use crate::engines::{answer::regex, Response, CLIENT};
+use crate::engines::{postsearch::RESULT_WINDOW, Response, CLIENT};
 
 pub async fn request(response: &Response) -> Option<wreq::RequestBuilder> {
-    for search_result in response.search_results.iter().take(8) {
-        if regex!(r"^https:\/\/github\.com\/[\w-]+\/[\w.-]+$").is_match(&search_result.result.url) {
-            return Some(CLIENT.get(search_result.result.url.as_str()));
+    for search_result in response.search_results.iter().take(RESULT_WINDOW) {
+        let Ok(url) = Url::parse(&search_result.result.url) else {
+            continue;
+        };
+
+        // a repo landing page: github.com/<owner>/<repo>, ignoring query
+        // strings, fragments and trailing slashes
+        let is_repo = url.host_str() == Some("github.com")
+            && url.path_segments().is_some_and(|mut segments| {
+                segments.next().is_some_and(|owner| !owner.is_empty())
+                    && segments.next().is_some_and(|repo| !repo.is_empty())
+                    && segments.next().is_none()
+            });
+
+        if is_repo {
+            return Some(CLIENT.get(url));
         }
     }
 

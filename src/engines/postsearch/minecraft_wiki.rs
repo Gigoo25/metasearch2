@@ -1,10 +1,10 @@
 use maud::{html, PreEscaped};
 use scraper::{Html, Selector};
 
-use crate::engines::{HttpResponse, Response, CLIENT};
+use crate::engines::{postsearch::RESULT_WINDOW, HttpResponse, Response, CLIENT};
 
 pub async fn request(response: &Response) -> Option<wreq::RequestBuilder> {
-    for search_result in response.search_results.iter().take(8) {
+    for search_result in response.search_results.iter().take(RESULT_WINDOW) {
         if search_result
             .result
             .url

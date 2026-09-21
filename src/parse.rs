@@ -169,6 +169,11 @@ pub(super) fn parse_html_response_with_opts(
             continue;
         }
 
+        if url.trim().is_empty() {
+            trace!("empty url for {title:?}, skipping");
+            continue;
+        }
+
         let url = normalize_url(&url);
 
         search_results.push(EngineSearchResult {
@@ -211,4 +216,26 @@ pub(super) fn parse_html_response_with_opts(
         answer_html: None,
         infobox_html: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_results_without_a_url() {
+        let body = r#"<html><body>
+            <div class="r"><a class="other">Some title</a><p>A description</p></div>
+        </body></html>"#;
+        let response = parse_html_response_with_opts(
+            body,
+            ParseOpts::new()
+                .result("div.r")
+                .title("a.t")
+                .href("a.t")
+                .description("p"),
+        )
+        .unwrap();
+        assert!(response.search_results.is_empty());
+    }
 }

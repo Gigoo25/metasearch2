@@ -2,10 +2,10 @@ use maud::{html, PreEscaped};
 use scraper::{Html, Selector};
 use url::Url;
 
-use crate::engines::{answer::regex, Response, CLIENT};
+use crate::engines::{answer::regex, postsearch::RESULT_WINDOW, Response, CLIENT};
 
 pub async fn request(response: &Response) -> Option<wreq::RequestBuilder> {
-    for search_result in response.search_results.iter().take(8) {
+    for search_result in response.search_results.iter().take(RESULT_WINDOW) {
         if regex!(r"^https:\/\/(stackoverflow\.com|serverfault\.com|superuser\.com|\w{1,}\.stackexchange\.com)\/questions\/\d+")
             .is_match(&search_result.result.url)
         {

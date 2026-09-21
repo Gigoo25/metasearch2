@@ -3,7 +3,7 @@ use scraper::{Html, Selector};
 use serde::Deserialize;
 use tracing::error;
 
-use crate::engines::{Engine, HttpResponse, Response, CLIENT};
+use crate::engines::{postsearch::RESULT_WINDOW, Engine, HttpResponse, Response, CLIENT};
 
 #[derive(Deserialize)]
 pub struct MdnConfig {
@@ -11,13 +11,14 @@ pub struct MdnConfig {
 }
 
 pub async fn request(response: &Response) -> Option<wreq::RequestBuilder> {
-    for search_result in response.search_results.iter().take(8) {
-        if search_result
-            .result
-            .url
-            .starts_with("https://developer.mozilla.org/en-US/docs/Web")
+    for search_result in response.search_results.iter().take(RESULT_WINDOW) {
+        let url = &search_result.result.url;
+        // any mdn page works; locale-less urls (e.g. /Web/API/Fetch_API)
+        // redirect to the real page
+        if url.starts_with("https://developer.mozilla.org/")
+            && url.len() > "https://developer.mozilla.org/".len()
         {
-            return Some(CLIENT.get(search_result.result.url.as_str()));
+            return Some(CLIENT.get(url.as_str()));
         }
     }
 
@@ -41,14 +42,23 @@ pub fn parse_response(
     let dom = Html::parse_document(body);
 
     let page_title = dom
-        .select(&Selector::parse("header > h1").unwrap())
+        .select(&Selector::parse("h1").unwrap())
         .next()?
         .text()
         .collect::<String>()
         .trim()
         .to_string();
 
-    let doc_query = Selector::parse(".section-content").unwrap();
+    // mdn switched the article body from .section-content to
+    // section.content-section; support both
+    let mut sections: Vec<_> = dom
+        .select(&Selector::parse("section.content-section").unwrap())
+        .collect();
+    if sections.is_empty() {
+        sections = dom
+            .select(&Selector::parse(".section-content").unwrap())
+            .collect();
+    }
 
     let max_sections = if config.max_sections == 0 {
         usize::MAX
@@ -56,8 +66,8 @@ pub fn parse_response(
         config.max_sections
     };
 
-    let doc_html = dom
-        .select(&doc_query)
+    let doc_html = sections
+        .iter()
         .map(|doc| doc.inner_html())
         .take(max_sections)
         .collect::<Vec<_>>()
