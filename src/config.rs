@@ -23,7 +23,7 @@ impl Default for Config {
                 show_settings_link: true,
                 stylesheet_url: "".to_string(),
                 stylesheet_str: "".to_string(),
-                favicon_url: "".to_string(),
+                favicon_url: "/favicon.svg".to_string(),
                 show_autocomplete: true,
             },
             image_search: ImageSearchConfig {

@@ -12,7 +12,7 @@ use axum::{
     extract::{Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
-    response::Response,
+    response::{Redirect, Response},
     routing::{get, post, MethodRouter},
     Router,
 };
@@ -71,6 +71,10 @@ pub async fn run(config: Config) {
         .route("/opensearch.xml", get(opensearch::route))
         .route("/autocomplete", get(autocomplete::route))
         .route("/image-proxy", get(image_proxy::route))
+        .route(
+            "/favicon.ico",
+            get(|| async { Redirect::permanent("/favicon.svg") }),
+        )
         .route("/kiwix", get(kiwix_proxy::route))
         .route("/kiwix/{*path}", get(kiwix_proxy::route))
         .layer(middleware::from_fn_with_state(
@@ -83,6 +87,7 @@ pub async fn run(config: Config) {
         "style.css",
         "script.js",
         "robots.txt",
+        "favicon.svg",
         "scripts/colorpicker.js",
         "themes/catppuccin-mocha.css",
         "themes/catppuccin-macchiato.css",
@@ -108,6 +113,7 @@ fn guess_mime_type(path: &str) -> &'static str {
     match path.rsplit('.').next() {
         Some("css") => "text/css; charset=utf-8",
         Some("js") => "text/javascript; charset=utf-8",
+        Some("svg") => "image/svg+xml",
         Some("txt") => "text/plain; charset=utf-8",
         _ => "text/plain; charset=utf-8",
     }
