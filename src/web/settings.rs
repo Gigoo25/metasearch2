@@ -1,9 +1,8 @@
 use axum::{
     http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     Extension, Form,
 };
-use axum_extra::extract::{cookie::Cookie, CookieJar};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +28,9 @@ pub async fn get(Extension(config): Extension<Config>) -> impl IntoResponse {
                     main {
                         a.back-to-index-button href="/" { "Back" }
                         h1 { "Settings" }
-                        form.settings-form method="post" {
+
+                        h2 { "Appearance" }
+                        form #settings-form.settings-form method="post" {
                             label for="theme" { "Theme" }
                             select name="stylesheet-url" selected=(config.ui.stylesheet_url) {
                                 { (theme_option("", "Ayu Dark")) }
@@ -51,9 +52,47 @@ pub async fn get(Extension(config): Extension<Config>) -> impl IntoResponse {
                                     { (config.ui.stylesheet_str) }
                                 }
                             }
-
-                            input #save-settings-button type="submit" value="Save";
                         }
+
+                        div.ranking {
+                            h2 { "Ranking" }
+                            @if config.site_rules.is_empty() {
+                                p { "Use the ranking menu under a search result, or add a domain below. Kiwix books use kiwix:<book>." }
+                            } @else {
+                                table.site-rules {
+                                    @for rule in &config.site_rules {
+                                        tr {
+                                            td.site-rule-host { (rule.host) }
+                                            td.site-rule-weight { (rule_action(rule.weight)) }
+                                            td {
+                                                form method="post" action="/settings/site-rule" {
+                                                    input type="hidden" name="host" value=(rule.host);
+                                                    input type="hidden" name="clear" value="true";
+                                                    input type="submit" value="undo";
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            form.site-rule-add method="post" action="/settings/site-rule" {
+                                input type="text" name="host" placeholder="example.com or kiwix:<book>" required;
+                                select name="weight" {
+                                    option value="2" { "raise" }
+                                    option value="0.5" { "lower" }
+                                    option value="0" { "hide" }
+                                }
+                                input type="submit" value="Add";
+                            }
+                            @if !config.site_rules.is_empty() {
+                                form method="post" action="/settings/site-rule" {
+                                    input type="hidden" name="clear_all" value="true";
+                                    input type="submit" value="Clear all";
+                                }
+                            }
+                        }
+
+                        input #save-settings-button type="submit" form="settings-form" value="Save";
                     }
                 }
             }
@@ -67,28 +106,101 @@ pub async fn get(Extension(config): Extension<Config>) -> impl IntoResponse {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Settings {
+    #[serde(default)]
     pub stylesheet_url: String,
+    #[serde(default)]
     pub stylesheet_str: String,
 }
 
-pub async fn post(
-    headers: HeaderMap,
-    mut jar: CookieJar,
-    Form(settings): Form<Settings>,
-) -> Response {
+#[derive(Deserialize)]
+pub struct SiteRuleForm {
+    #[serde(default)]
+    pub host: String,
+    pub weight: Option<f64>,
+    #[serde(default)]
+    pub clear: bool,
+    #[serde(default)]
+    pub clear_all: bool,
+}
+
+fn rule_action(weight: f64) -> String {
+    if weight <= 0. {
+        "hide".to_string()
+    } else if weight > 1. {
+        format!("raise ×{weight}")
+    } else if weight < 1. {
+        format!("lower ×{weight}")
+    } else {
+        "default".to_string()
+    }
+}
+
+fn origin_matches_host(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get("origin").and_then(|h| h.to_str().ok()) else {
-        return (StatusCode::BAD_REQUEST, "Missing or invalid Origin header").into_response();
+        return false;
     };
     let Some(host) = headers.get("host").and_then(|h| h.to_str().ok()) else {
-        return (StatusCode::BAD_REQUEST, "Missing or invalid Host header").into_response();
+        return false;
     };
-    if origin != format!("http://{host}") && origin != format!("https://{host}") {
+    origin == format!("http://{host}") || origin == format!("https://{host}")
+}
+
+/// The path of the page a form was submitted from, if it was this instance.
+fn return_path(headers: &HeaderMap) -> Option<String> {
+    let referer = headers.get(header::REFERER)?.to_str().ok()?;
+    let url = url::Url::parse(referer).ok()?;
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+
+    let referer_host = match url.port() {
+        Some(port) => format!("{}:{port}", url.host_str()?),
+        None => url.host_str()?.to_string(),
+    };
+    if referer_host != host {
+        return None;
+    }
+
+    let mut path = url.path().to_string();
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    Some(path)
+}
+
+pub async fn site_rule(headers: HeaderMap, Form(form): Form<SiteRuleForm>) -> Response {
+    if !origin_matches_host(&headers) {
         return (StatusCode::BAD_REQUEST, "Origin does not match Host").into_response();
     }
 
-    let mut settings_cookie = Cookie::new("settings", serde_json::to_string(&settings).unwrap());
-    settings_cookie.make_permanent();
-    jar = jar.add(settings_cookie);
+    let result = if form.clear_all {
+        crate::db::clear_site_rules()
+    } else if form.clear {
+        crate::db::remove_site_rule(&form.host)
+    } else {
+        crate::db::set_site_rule(&form.host, form.weight.unwrap_or(1.0))
+    };
 
-    (StatusCode::FOUND, [(header::LOCATION, "/settings")], jar).into_response()
+    match result {
+        Ok(()) => {
+            let target = return_path(&headers).unwrap_or_else(|| "/settings".to_string());
+            Redirect::to(&target).into_response()
+        }
+        Err(err) => (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
+    }
+}
+
+pub async fn post(headers: HeaderMap, Form(settings): Form<Settings>) -> Response {
+    if !origin_matches_host(&headers) {
+        return (StatusCode::BAD_REQUEST, "Origin does not match Host").into_response();
+    }
+
+    let json = match serde_json::to_string(&settings) {
+        Ok(json) => json,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    };
+
+    match crate::db::set_setting("ui", &json) {
+        Ok(()) => Redirect::to("/settings").into_response(),
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
 }

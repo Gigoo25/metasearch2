@@ -48,6 +48,10 @@ fn render_beginning_of_html(search: &SearchQuery) -> String {
         html lang="en";
         {(head_html(Some(&search.query), &search.config))}
         body;
+        a.home-link href="/" { "← Home" }
+        @if search.config.ui.show_settings_link {
+            a.settings-link href="/settings" { "Settings" }
+        }
         div.main-container.{"search-" (search.tab.to_string())};
         main;
         (form_html)

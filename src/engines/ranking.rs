@@ -37,10 +37,17 @@ pub fn merge_engine_responses(
             if url_weight <= 0. {
                 continue;
             }
-            let result_score = result_score * url_weight;
+            let mut result_score = result_score * url_weight;
+
+            // per-client domain rules; kiwix content is keyed by ZIM book and
+            // only sorted, never removed
+            if let Some(weight) = site_rule_multiplier(&config, &search_result.url) {
+                result_score *= weight;
+            }
+
             // prefer results that actually mention the query terms
-            let result_score = result_score
-                * relevance_multiplier(query, &search_result.title, &search_result.description);
+            result_score *=
+                relevance_multiplier(query, &search_result.title, &search_result.description);
 
             if let Some(existing_result) = search_results
                 .iter_mut()
@@ -162,6 +169,20 @@ fn dedupe_host_of(url: &str) -> Option<String> {
     let path = path.strip_prefix("kiwix/").unwrap_or(path);
     let book = path.strip_prefix("content/")?.split('/').next()?;
     (!book.is_empty()).then(|| format!("kiwix:{book}"))
+}
+
+/// The site-rule multiplier for a result url, or `None` when the result is
+/// hidden by a rule. Kiwix content uses `kiwix:<book>` as its key and is never
+/// hidden: a hide (weight 0) becomes a strong demotion instead.
+fn site_rule_multiplier(config: &Config, url: &str) -> Option<f64> {
+    let key = dedupe_host_of(url)?;
+    let weight = config.site_rule_weight(&key)?;
+
+    if key.starts_with("kiwix:") {
+        return Some(weight.max(0.05));
+    }
+
+    (weight > 0.).then_some(weight)
 }
 
 fn is_duplicate(existing: &EngineSearchResult, candidate: &EngineSearchResult) -> bool {
@@ -350,6 +371,7 @@ pub fn merge_images_responses(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SiteRule;
 
     fn engine_result(url: &str, title: &str, description: &str) -> EngineSearchResult {
         EngineSearchResult {
@@ -427,6 +449,43 @@ mod tests {
             &kiwix,
             &engine_result("/kiwix/content/book_a/A/Two", "Other", "")
         ));
+    }
+
+    #[test]
+    fn kiwix_rules_sort_but_never_hide() {
+        let config = Config {
+            site_rules: vec![SiteRule {
+                host: "kiwix:book_a".to_string(),
+                weight: 0.0,
+            }],
+            ..Config::default()
+        };
+        assert_eq!(
+            site_rule_multiplier(&config, "/kiwix/content/book_a/A/One"),
+            Some(0.05)
+        );
+
+        let config = Config {
+            site_rules: vec![SiteRule {
+                host: "kiwix:book_a".to_string(),
+                weight: 3.0,
+            }],
+            ..Config::default()
+        };
+        assert_eq!(
+            site_rule_multiplier(&config, "/kiwix/content/book_a/A/One"),
+            Some(3.0)
+        );
+
+        let config = Config {
+            site_rules: vec![SiteRule {
+                host: "example.com".to_string(),
+                weight: 0.0,
+            }],
+            ..Config::default()
+        };
+        assert_eq!(site_rule_multiplier(&config, "https://example.com/x"), None);
+        assert_eq!(site_rule_multiplier(&config, "https://other.com/x"), None);
     }
 
     #[test]

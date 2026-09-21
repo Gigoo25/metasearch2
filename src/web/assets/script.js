@@ -212,3 +212,4 @@ if (customCssEl) {
     localStorage.setItem("custom-css-details-open", customCssDetailsEl.open);
   });
 }
+

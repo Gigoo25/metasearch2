@@ -577,3 +577,53 @@ h3.answer-thesaurus-category-title {
   display: block;
   margin-top: 1em;
 }
+
+/* per-domain ranking menu */
+.search-result-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.site-rule-menu summary {
+  cursor: pointer;
+  color: var(--fg-3);
+  font-size: 0.75rem;
+  list-style: none;
+}
+.site-rule-menu summary::-webkit-details-marker {
+  display: none;
+}
+.site-rule-menu-options {
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+.site-rule-menu-options input {
+  font-family: monospace;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.35rem;
+  background: transparent;
+  color: var(--fg-3);
+  border: 1px solid var(--bg-4);
+  cursor: pointer;
+}
+.site-rule-menu-options input:hover {
+  color: var(--fg-1);
+  border-color: var(--accent);
+}
+table.site-rules {
+  border-collapse: collapse;
+}
+table.site-rules td {
+  padding: 0.1rem 0.5rem 0.1rem 0;
+}
+
+.home-link,
+.home-link:visited {
+  position: absolute;
+  top: 1em;
+  left: 1em;
+  font-size: 0.9rem;
+  color: var(--link);
+}
