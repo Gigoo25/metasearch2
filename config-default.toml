@@ -17,6 +17,14 @@ api = false
 # numbat = false
 # fend = true
 # kiwix = true
+# google search is removed: it only serves results with javascript now
+# (autocomplete still uses it)
+# mwmbl and wiby are small-web engines, enabled by default with low weights
+
+# engines are paced automatically to avoid rate limits; the minimum delay
+# between two requests to one engine can be overridden per engine:
+# [engines.google]
+# min_interval_ms = 5000
 
 # optional: offline full-text search through a local kiwix-serve instance
 # (https://github.com/kiwix/kiwix-tools). The url must be reachable from both
@@ -25,7 +33,8 @@ api = false
 # enabled = true
 # url = "http://127.0.0.1:8080"
 # book = "" # restrict search to one book by its kiwix name; empty means all books
-# page_length = 25
+# page_length = 10 # results to request from kiwix
+# max_per_book = 5 # cap on results kept from a single ZIM
 
 [cache]
 # enabled = false

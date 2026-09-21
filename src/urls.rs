@@ -18,12 +18,6 @@ pub fn normalize_url(url: &str) -> String {
         return url.to_string();
     };
 
-    // make sure the scheme is https, except for local addresses (like a local
-    // kiwix instance), where http is expected and upgrading would break links
-    if url.scheme() == "http" && !is_local_host(&url) {
-        url.set_scheme("https").unwrap();
-    }
-
     // remove fragment
     url.set_fragment(None);
 
@@ -72,17 +66,6 @@ pub fn normalize_url(url: &str) -> String {
     };
 
     url
-}
-
-fn is_local_host(url: &Url) -> bool {
-    match url.host() {
-        Some(url::Host::Domain(domain)) => {
-            domain == "localhost" || domain.ends_with(".localhost") || domain.ends_with(".local")
-        }
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    }
 }
 
 impl HostAndPath {
@@ -223,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn test_local_hosts_keep_http() {
+    fn test_http_scheme_is_preserved() {
         for url in [
             "http://localhost:8080/content/book/A/Article",
             "http://127.0.0.1:8080/content/book/A/Article",
@@ -235,7 +218,8 @@ mod tests {
 
         assert_eq!(
             normalize_url("http://example.com/article"),
-            "https://example.com/article"
+            "http://example.com/article",
+            "http schemes are preserved so http-only small-web sites keep working"
         );
     }
 

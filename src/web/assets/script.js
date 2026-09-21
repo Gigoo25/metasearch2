@@ -10,6 +10,7 @@ if (searchInputEl) {
   let lastValue = "";
   let nextQueryId = 0;
   let lastLoadedQueryId = -1;
+  let suggestionsTimer;
   async function updateSuggestions() {
     const value = searchInputEl.value;
 
@@ -157,15 +158,21 @@ if (searchInputEl) {
     }
   });
 
-  // update the input suggestions on input
+  // update the input suggestions on input (debounced so typing doesn't fire a
+  // request per keystroke)
   searchInputEl.addEventListener("input", () => {
     clearFocusedSuggestion();
-    updateSuggestions();
+    clearTimeout(suggestionsTimer);
+    suggestionsTimer = setTimeout(updateSuggestions, 200);
   });
   // and when they click suggestions
-  searchInputEl.addEventListener("click", updateSuggestions);
+  searchInputEl.addEventListener("click", () => {
+    clearTimeout(suggestionsTimer);
+    updateSuggestions();
+  });
   // on unfocus hide the suggestions
   searchInputEl.addEventListener("blur", (e) => {
+    clearTimeout(suggestionsTimer);
     suggestionsEl.style.visibility = "hidden";
   });
 }

@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eyre::bail;
+use eyre::{bail, eyre};
 use futures::future::join_all;
 use maud::PreEscaped;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -19,6 +19,7 @@ use wreq_util::Emulation;
 mod cache;
 mod macros;
 mod ranking;
+mod rate_limit;
 
 use self::cache::{CacheKey, CachedSearch};
 use crate::{
@@ -36,10 +37,10 @@ engines! {
     GoogleScholar = "google_scholar",
     Bing = "bing",
     Brave = "brave",
+    DuckDuckGo = "duckduckgo",
     Marginalia = "marginalia",
-    RightDao = "rightdao",
-    Stract = "stract",
-    Yep = "yep",
+    Mwmbl = "mwmbl",
+    Wiby = "wiby",
     Kiwix = "kiwix",
     // answer
     Dictionary = "dictionary",
@@ -64,12 +65,11 @@ engine_requests! {
     // search
     Bing => search::bing::request, parse_response,
     Brave => search::brave::request, parse_response,
+    DuckDuckGo => search::duckduckgo::request, parse_response,
     GoogleScholar => search::google_scholar::request, parse_response,
-    Google => search::google::request, parse_response,
     Marginalia => search::marginalia::request, parse_response,
-    RightDao => search::rightdao::request, parse_response,
-    Stract => search::stract::request, parse_response,
-    Yep => search::yep::request, parse_response,
+    Mwmbl => search::mwmbl::request, parse_response,
+    Wiby => search::wiby::request, parse_response,
     Kiwix => search::kiwix::request, parse_with_config,
     // answer
     Dictionary => answer::dictionary::request, parse_response,
@@ -99,7 +99,6 @@ engine_postsearch_requests! {
 }
 
 engine_image_requests! {
-    Google => search::google::request_images, parse_images_response,
     Bing => search::bing::request_images, parse_images_response,
 }
 
@@ -368,26 +367,75 @@ async fn make_request(
     query: &SearchQuery,
     send_engine_progress_update: impl Fn(Engine, EngineProgressUpdate),
 ) -> eyre::Result<HttpResponse> {
-    send_engine_progress_update(engine, EngineProgressUpdate::Requesting);
-
-    let mut res = request.send().await?;
-
-    send_engine_progress_update(engine, EngineProgressUpdate::Downloading);
-
-    let mut body_bytes = Vec::new();
-    while let Some(chunk) = res.chunk().await? {
-        body_bytes.extend_from_slice(&chunk);
+    // skip engines that recently told us to slow down
+    if let Some(remaining) = rate_limit::cooldown_remaining(engine) {
+        return Err(eyre!(
+            "rate limited, retrying in {}s",
+            remaining.as_secs().max(1)
+        ));
     }
-    let body = String::from_utf8_lossy(&body_bytes).to_string();
 
-    send_engine_progress_update(engine, EngineProgressUpdate::Parsing);
+    rate_limit::wait_for_slot(query.config.engines.get(engine), engine).await;
 
-    let http_response = HttpResponse {
-        res,
-        body,
-        config: query.config.clone(),
-    };
-    Ok(http_response)
+    let mut request = Some(request);
+    let mut retried = false;
+
+    loop {
+        send_engine_progress_update(engine, EngineProgressUpdate::Requesting);
+
+        let current = request
+            .take()
+            .expect("request is always set before looping");
+        let retry_request = current.try_clone();
+        let mut res = current.send().await?;
+
+        let status = res.status().as_u16();
+        if matches!(status, 429 | 503) {
+            rate_limit::report_rate_limited(engine);
+            return Err(eyre!("engine returned HTTP {status}, cooling down"));
+        }
+        if !(200..300).contains(&status) {
+            return Err(eyre!("engine returned HTTP {status}"));
+        }
+
+        send_engine_progress_update(engine, EngineProgressUpdate::Downloading);
+
+        let mut body_bytes = Vec::new();
+        while let Some(chunk) = res.chunk().await? {
+            body_bytes.extend_from_slice(&chunk);
+        }
+        let body = String::from_utf8_lossy(&body_bytes).to_string();
+
+        match rate_limit::detect_challenge(&body) {
+            // the engine asked us to wait a moment, retry once
+            Some(rate_limit::Challenge::Wait(delay)) if !retried => {
+                let Some(retry_request) = retry_request else {
+                    return Err(eyre!(
+                        "engine asked us to wait but the request can't be retried"
+                    ));
+                };
+                retried = true;
+                tokio::time::sleep(delay).await;
+                request = Some(retry_request);
+                continue;
+            }
+            Some(_) => {
+                rate_limit::report_rate_limited(engine);
+                return Err(eyre!("engine served a bot challenge, cooling down"));
+            }
+            None => {}
+        }
+
+        rate_limit::report_success(engine);
+
+        send_engine_progress_update(engine, EngineProgressUpdate::Parsing);
+
+        return Ok(HttpResponse {
+            res,
+            body,
+            config: query.config.clone(),
+        });
+    }
 }
 
 async fn make_requests(

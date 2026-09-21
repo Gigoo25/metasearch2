@@ -62,8 +62,14 @@ impl Default for EnginesConfig {
         // enabled
 
         // main search engines
-        map.insert(Engine::Google, EngineConfig::new().with_weight(1.05));
+        map.insert(
+            Engine::Google,
+            // google search/image search are removed (javascript-only results);
+            // the engine stays for autocomplete, so searches are disabled
+            EngineConfig::new().with_weight(1.05).disabled(),
+        );
         map.insert(Engine::Bing, EngineConfig::new().with_weight(1.0));
+        map.insert(Engine::DuckDuckGo, EngineConfig::new().with_weight(0.90));
         map.insert(Engine::Brave, EngineConfig::new().with_weight(1.25));
         map.insert(
             Engine::Marginalia,
@@ -85,28 +91,20 @@ impl Default for EnginesConfig {
             ),
         );
 
+        // small-web search engines (low weights: small and quirky indexes)
+        map.insert(Engine::Mwmbl, EngineConfig::new().with_weight(0.15));
+        map.insert(Engine::Wiby, EngineConfig::new().with_weight(0.10));
+
         // additional search engines
         map.insert(
             Engine::GoogleScholar,
             EngineConfig::new().with_weight(0.50).disabled(),
         );
-        map.insert(
-            Engine::RightDao,
-            EngineConfig::new().with_weight(0.10).disabled(),
-        );
-        map.insert(
-            Engine::Stract,
-            EngineConfig::new().with_weight(0.15).disabled(),
-        );
-        map.insert(
-            Engine::Yep,
-            EngineConfig::new().with_weight(0.10).disabled(),
-        );
 
         // offline search (local kiwix-serve instance)
         map.insert(
             Engine::Kiwix,
-            EngineConfig::new().with_weight(0.30).disabled(),
+            EngineConfig::new().with_weight(1.0).disabled(),
         );
 
         // calculators (give them a high weight so they're always the first thing in
