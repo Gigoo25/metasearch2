@@ -19,13 +19,21 @@ notes and the zimit design live in `HANDOFF.md`.
     restores it, raising `linuxmint.com` moved it from #3 to #1.
   - Optional domain leaderboard of aggregate votes is still open.
 
-- [ ] Safe search
-  - Levels off / moderate / strict, default off; HTML checkbox in Settings,
+- [ ] Safe search — implemented, pending confirmation
+  - Levels off / moderate / strict, default off; HTML select in Settings,
     stored in the database (`settings` table) like the theme.
-  - Engine side: pass each engine's safe parameter (Bing `adlt=strict`, Brave
-    `safesearch=strict`, ...).
-  - Local side: domain blocklist plus keyword filtering of titles and
-    descriptions; also image results and the image proxy.
+  - Engine side: Bing `adlt`, Brave `safesearch`, DuckDuckGo `kp` (including
+    Bing image search).
+  - Local side: adult-domain and keyword blocklist (`src/safe_search.rs`)
+    applied to search results, featured snippets, image results and the image
+    proxy, so the local index and kiwix are covered too. The level is part of
+    the cache fingerprint, so cached responses can't leak across levels.
+  - Verified: 47 tests pass (blocklist, false-positive, engine-parameter and
+    mapping tests). In the container the settings round-trip persists, strict
+    and off produce separate cache entries, and a local instance with the image
+    proxy enabled returns `Blocked by safe search` for an adult host.
+  - The image-proxy block is only reachable when `image_search.proxy` is
+    enabled (disabled by default).
 
 - [ ] Small web
   - Sources are in place: Marginalia, Mwmbl, Wiby (weights 0.15/0.15/0.10).
@@ -144,6 +152,25 @@ notes and the zimit design live in `HANDOFF.md`.
 
 ### Follow-ups (smaller)
 
+- Static assets (`style.css`, themes, `script.js`, favicon) are served with only
+  a `Content-Type` header, so the browser re-fetches them and the stylesheet can
+  arrive after the html (visible flash of unstyled content). Add
+  `Cache-Control`/`ETag` to `static_route` (they only change with the binary),
+  and consider a version query/hash for cache busting.
+- Move config to environment variables (`METASEARCH_*`, e.g.
+  `METASEARCH_BIND`, `METASEARCH_DATABASE_PATH`, `METASEARCH_KIWIX_ENABLED`)
+  since docker is the primary deployment; keep `config.toml` (and `CONFIG`) as
+  an optional override. Needs a mapping for the nested sections (`ui.*`,
+  `engines.*`, `cache.*`, `database.*`, `image_search.*`, `urls.*`) and a
+  documented precedence order.
+- Put the version number at the bottom right of every page, visible but
+  inconspicuous. `span.version-info` already does this on the index page
+  (absolute, bottom/right) behind `ui.show_version_info`; move it into the
+  shared page layout so search and settings show it too, and make it quiet
+  (smaller, reduced opacity, `user-select: none`, hash-only on hover or similar).
+- Split inline `#[cfg(test)] mod tests` blocks into their own files (e.g.
+  `src/foo/tests.rs` or a `tests/` directory) once the modules settle, so test
+  code doesn't bloat the source files.
 - Ranking extras: engine-agreement bonus, aggregator demotion, per-engine
   quality weighting; collect more bad-result examples.
 - Tune Marginalia/Mwmbl/Wiby weights once the small-web presets land.
