@@ -41,12 +41,18 @@ pub fn normalize_query(query: &str) -> String {
     query.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Bump this whenever the ranking/scoring logic changes, so cached responses
+/// scored with the old logic are not served.
+const RANKING_VERSION: u32 = 4;
+
 /// Hashes the parts of the config that affect the contents of a response. The
 /// result must be deterministic across restarts, otherwise old cache entries
 /// would either never be hit or (worse) be hit after a config change.
 #[must_use]
 pub fn config_fingerprint(config: &Config) -> u64 {
     let mut hasher = DefaultHasher::new();
+
+    RANKING_VERSION.hash(&mut hasher);
 
     let mut engines: Vec<_> = config.engines.map.iter().collect();
     engines.sort_by_key(|(engine, _)| **engine);

@@ -4,7 +4,7 @@
 //! kiwix-serve doesn't have a JSON search API, but its `/search` endpoint can
 //! return RSS XML (`format=xml`), which is what this engine parses.
 
-use std::{sync::LazyLock, time::Duration};
+use std::{collections::HashMap, sync::LazyLock, time::Duration};
 
 use eyre::{eyre, Result};
 use quick_xml::events::Event;
@@ -86,6 +86,10 @@ pub struct KiwixConfig {
     pub book: String,
     #[serde(default = "default_page_length")]
     pub page_length: usize,
+    /// Maximum number of results to keep from a single ZIM, so one book can't
+    /// fill the result list.
+    #[serde(default = "default_max_per_book")]
+    pub max_per_book: usize,
 }
 
 fn default_url() -> String {
@@ -93,7 +97,11 @@ fn default_url() -> String {
 }
 
 fn default_page_length() -> usize {
-    25
+    10
+}
+
+fn default_max_per_book() -> usize {
+    5
 }
 
 fn kiwix_config(config: &Config) -> Option<KiwixConfig> {
@@ -158,7 +166,7 @@ pub fn parse_with_config(res: &HttpResponse) -> Result<EngineResponse> {
         .unwrap_or(&config.url)
         .trim_end_matches('/');
 
-    parse_xml(&res.body, link_base)
+    parse_xml(&res.body, link_base, config.max_per_book)
 }
 
 #[derive(Default)]
@@ -175,7 +183,7 @@ enum Field {
     Description,
 }
 
-fn parse_xml(body: &str, base_url: &str) -> Result<EngineResponse> {
+fn parse_xml(body: &str, base_url: &str, max_per_book: usize) -> Result<EngineResponse> {
     let mut reader = Reader::from_str(body);
     let mut response = EngineResponse::new();
     let mut item: Option<Item> = None;
@@ -241,6 +249,20 @@ fn parse_xml(body: &str, base_url: &str) -> Result<EngineResponse> {
         }
     }
 
+    // keep only the best few results per ZIM so one book can't flood the list
+    let mut book_counts: HashMap<String, usize> = HashMap::new();
+    response
+        .search_results
+        .retain(|result| match book_of(&result.url) {
+            Some(book) => {
+                let count = book_counts.entry(book.to_string()).or_insert(0);
+                let keep = *count < max_per_book;
+                *count += 1;
+                keep
+            }
+            None => true,
+        });
+
     Ok(response)
 }
 
@@ -256,10 +278,41 @@ fn push_text(item: Option<&mut Item>, field: Option<Field>, text: &str) {
     }
 }
 
+/// The ZIM a kiwix content url belongs to, e.g. `wikipedia_en_all` for
+/// `/kiwix/content/wikipedia_en_all/A/Article`.
+fn book_of(url: &str) -> Option<&str> {
+    let path = url.strip_prefix('/').unwrap_or(url);
+    let path = path.strip_prefix("kiwix/").unwrap_or(path);
+    let book = path.strip_prefix("content/")?.split('/').next()?;
+    (!book.is_empty()).then_some(book)
+}
+
+/// Namespace page prefixes from MediaWiki-based ZIMs. These are navigational
+/// metadata and rarely what someone is searching for.
+const NAMESPACE_PREFIXES: &[&str] = &[
+    "Category:",
+    "Template:",
+    "Wikipedia:",
+    "File:",
+    "Portal:",
+    "Help:",
+    "Draft:",
+    "Talk:",
+    "User:",
+    "MediaWiki:",
+    "Module:",
+];
+
+fn is_namespace_page(title: &str) -> bool {
+    NAMESPACE_PREFIXES
+        .iter()
+        .any(|prefix| title.starts_with(prefix))
+}
+
 fn into_search_result(item: Item, base_url: &str) -> Option<EngineSearchResult> {
     let title = item.title.trim().to_string();
     let url = item.url.trim();
-    if title.is_empty() || url.is_empty() {
+    if title.is_empty() || url.is_empty() || is_namespace_page(&title) {
         return None;
     }
 
@@ -308,7 +361,7 @@ mod tests {
 
     #[test]
     fn keeps_relative_links_with_empty_public_url() {
-        let response = parse_xml(BODY, "").unwrap();
+        let response = parse_xml(BODY, "", 25).unwrap();
         assert_eq!(
             response.search_results[0].url,
             "/content/wikipedia_en_ray_charles/A/Ray_Charles"
@@ -317,7 +370,7 @@ mod tests {
 
     #[test]
     fn parses_search_results() {
-        let response = parse_xml(BODY, "http://127.0.0.1:8080").unwrap();
+        let response = parse_xml(BODY, "http://127.0.0.1:8080", 25).unwrap();
         assert_eq!(response.search_results.len(), 2);
         assert_eq!(response.search_results[0].title, "Ray Charles");
         assert_eq!(
@@ -334,7 +387,33 @@ mod tests {
     #[test]
     fn ignores_empty_items() {
         let body = "<rss><channel><item><title></title><link></link></item></channel></rss>";
-        let response = parse_xml(body, "http://localhost:8080").unwrap();
+        let response = parse_xml(body, "http://localhost:8080", 25).unwrap();
         assert!(response.search_results.is_empty());
+    }
+
+    #[test]
+    fn skips_namespace_pages() {
+        let body = r#"<rss><channel>
+            <item><title>Category:YouTube</title><link>/kiwix/content/book_a/A/Cat</link></item>
+            <item><title>YouTube</title><link>/kiwix/content/book_a/A/Article</link></item>
+        </channel></rss>"#;
+        let response = parse_xml(body, "", 25).unwrap();
+        assert_eq!(response.search_results.len(), 1);
+        assert_eq!(response.search_results[0].title, "YouTube");
+    }
+
+    #[test]
+    fn caps_results_per_book() {
+        let body = r#"<rss><channel>
+            <item><title>a</title><link>/kiwix/content/book_a/A/1</link></item>
+            <item><title>b</title><link>/kiwix/content/book_a/A/2</link></item>
+            <item><title>c</title><link>/kiwix/content/book_a/A/3</link></item>
+            <item><title>d</title><link>/kiwix/content/book_b/A/1</link></item>
+        </channel></rss>"#;
+        let response = parse_xml(body, "", 2).unwrap();
+        assert_eq!(response.search_results.len(), 3);
+        assert_eq!(response.search_results[0].title, "a");
+        assert_eq!(response.search_results[1].title, "b");
+        assert_eq!(response.search_results[2].title, "d");
     }
 }

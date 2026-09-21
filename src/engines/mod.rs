@@ -469,7 +469,7 @@ async fn make_requests(
         }
     }
 
-    let response = ranking::merge_engine_responses(query.config.clone(), responses);
+    let response = ranking::merge_engine_responses(query.config.clone(), &query.query, responses);
     let has_infobox = response.infobox.is_some();
     let network_unavailable = network_failed && !network_succeeded;
 
