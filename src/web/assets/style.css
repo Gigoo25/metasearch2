@@ -502,6 +502,9 @@ h3.answer-thesaurus-category-title {
 .infobox img {
   max-width: 100%;
 }
+.infobox a:visited {
+  color: var(--link);
+}
 .infobox-docs_rs-version {
   opacity: 0.5;
   font-weight: normal;
