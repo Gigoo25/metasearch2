@@ -6,7 +6,11 @@ use axum::{
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use serde::{Deserialize, Serialize};
 
-use crate::{config::Config, safe_search::SafeSearch, web::head_html};
+use crate::{
+    config::Config,
+    safe_search::SafeSearch,
+    web::{head_html, version_info},
+};
 
 pub async fn get(Extension(config): Extension<Config>) -> impl IntoResponse {
     let theme_option = |value: &str, name: &str| -> Markup {
@@ -104,6 +108,7 @@ pub async fn get(Extension(config): Extension<Config>) -> impl IntoResponse {
                         input #save-settings-button type="submit" form="settings-form" value="Save";
                     }
                 }
+                (version_info())
             }
         }
     }

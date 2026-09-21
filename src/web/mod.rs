@@ -6,6 +6,7 @@ mod opensearch;
 mod search;
 mod settings;
 
+use std::sync::OnceLock;
 use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 
 use axum::{
@@ -21,22 +22,102 @@ use tracing::{error, info};
 
 use crate::config::Config;
 
-macro_rules! register_static_routes {
-    ( $app:ident, $( $x:expr ),* ) => {
-        {
-            $(
-                let $app = $app.route(
-                    concat!("/", $x),
-                    static_route(
-                        include_str!(concat!("assets/", $x)),
-                        guess_mime_type($x)
-                    ),
-                );
-            )*
+const BASE_COMMIT_URL: &str = "https://github.com/mat-1/metasearch2/commit/";
+pub const VERSION: &str = std::env!("CARGO_PKG_VERSION");
+const COMMIT_HASH: &str = std::env!("GIT_HASH");
+const COMMIT_HASH_SHORT: &str = std::env!("GIT_HASH_SHORT");
 
-            $app
+/// Cache-busting value for static assets. It is the hash of the embedded asset
+/// contents (set up in `register_static_routes!`), so it changes whenever any
+/// asset changes, but not on unrelated rebuilds. Before the routes are set up
+/// (which never serves html) it falls back to the commit hash/version.
+static ASSET_VERSION: OnceLock<String> = OnceLock::new();
+
+#[must_use]
+pub fn asset_version() -> &'static str {
+    ASSET_VERSION.get().map_or_else(
+        || {
+            if commit_available() {
+                COMMIT_HASH_SHORT
+            } else {
+                VERSION
+            }
+        },
+        String::as_str,
+    )
+}
+
+/// Whether the build knows the commit it was built from. Container builds
+/// don't have `.git`, so the hash is `unknown` (or empty from an older
+/// build script).
+fn commit_available() -> bool {
+    !COMMIT_HASH.is_empty()
+        && COMMIT_HASH != "unknown"
+        && !COMMIT_HASH_SHORT.is_empty()
+        && COMMIT_HASH_SHORT != "unknown"
+}
+
+/// Adds the cache-busting version to same-origin asset paths; external and
+/// `data:` urls are returned unchanged.
+#[must_use]
+pub(crate) fn asset_url(url: &str) -> String {
+    if !url.starts_with('/') || url.starts_with("//") {
+        return url.to_string();
+    }
+
+    let separator = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{separator}v={}", asset_version())
+}
+
+/// A small version marker shown in the bottom right corner of every page, so
+/// it's visible without being intrusive.
+#[must_use]
+pub fn version_info() -> Markup {
+    let has_commit = commit_available();
+
+    html! {
+        span.version-info {
+            @if !has_commit {
+                "Version "
+                (VERSION)
+            } @else {
+                "Version "
+                (VERSION)
+                " ("
+                a href=(format!("{BASE_COMMIT_URL}{COMMIT_HASH}")) { (COMMIT_HASH_SHORT) }
+                ")"
+            }
         }
-    };
+    }
+}
+
+macro_rules! register_static_routes {
+    ( $app:ident, $( $x:expr ),* ) => {{
+        {
+            use std::hash::{Hash, Hasher};
+
+            // the asset version is a hash of every embedded asset, so a change
+            // to any of them busts the browser cache
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            $(
+                $x.hash(&mut hasher);
+                include_str!(concat!("assets/", $x)).hash(&mut hasher);
+            )*
+            let _ = ASSET_VERSION.set(format!("{:016x}", hasher.finish()));
+        }
+
+        $(
+            let $app = $app.route(
+                concat!("/", $x),
+                static_route(
+                    include_str!(concat!("assets/", $x)),
+                    guess_mime_type($x)
+                ),
+            );
+        )*
+
+        $app
+    }};
 }
 
 pub async fn run(config: Config) {
@@ -68,7 +149,15 @@ pub async fn run(config: Config) {
     where
         S: Clone + Send + Sync + 'static,
     {
-        let response = ([(header::CONTENT_TYPE, content_type)], content);
+        let response = (
+            [
+                (header::CONTENT_TYPE, content_type),
+                // assets are baked into the binary and requested with a version
+                // query, so the browser can cache them forever
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            content,
+        );
         get(|| async { response })
     }
 
@@ -164,18 +253,55 @@ pub fn head_html(title: Option<&str>, config: &Config) -> Markup {
                 }
                 {(config.ui.site_name)}
             }
-            link rel="stylesheet" href="/style.css";
+            link rel="stylesheet" href=(asset_url("/style.css"));
             @if !config.ui.stylesheet_url.is_empty() {
-                link rel="stylesheet" href=(config.ui.stylesheet_url);
+                link rel="stylesheet" href=(asset_url(&config.ui.stylesheet_url));
             }
             @if !config.ui.stylesheet_str.is_empty() {
                 style { (PreEscaped(html_escape::encode_style(&config.ui.stylesheet_str))) }
             }
             @if !config.ui.favicon_url.is_empty() {
-                link rel="icon" href=(config.ui.favicon_url);
+                link rel="icon" href=(asset_url(&config.ui.favicon_url));
             }
-            script src="/script.js" defer {}
+            script src=(asset_url("/script.js")) defer {}
             link rel="search" type="application/opensearchdescription+xml" title="metasearch" href="/opensearch.xml";
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asset_urls_are_versioned() {
+        assert!(asset_url("/style.css").starts_with("/style.css?v="));
+        assert!(
+            asset_url("/themes/everforest.css?v=1").starts_with("/themes/everforest.css?v=1&v=")
+        );
+
+        // external and data urls are left alone
+        assert_eq!(
+            asset_url("https://example.com/style.css"),
+            "https://example.com/style.css"
+        );
+        assert_eq!(
+            asset_url("//cdn.example.com/style.css"),
+            "//cdn.example.com/style.css"
+        );
+        assert_eq!(asset_url("data:text/css,"), "data:text/css,");
+    }
+
+    #[test]
+    fn asset_version_is_never_empty() {
+        assert!(!asset_version().is_empty());
+    }
+
+    #[test]
+    fn version_info_always_renders() {
+        let html = version_info().into_string();
+        assert!(html.contains("version-info"));
+        assert!(html.contains(VERSION));
+        assert!(html.contains("Version"));
     }
 }

@@ -156,7 +156,7 @@ pub async fn request(query: &SearchQuery) -> EngineResponse {
                 }
             }
         }
-        script src="/scripts/colorpicker.js" {}
+        script src=(crate::web::asset_url("/scripts/colorpicker.js")) {}
     })
 }
 

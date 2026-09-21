@@ -150,13 +150,33 @@ notes and the zimit design live in `HANDOFF.md`.
   - Full design, security requirements and verification plan are in the
     "Next task" section of `HANDOFF.md`.
 
+### Search latency
+
+- [ ] Speed up uncached (and unindexed) searches. Today the merged result list is
+  only rendered after every engine has answered or timed out, so one slow engine
+  (cold kiwix, a rate-limit wait, a hanging site) delays the whole page; the
+  chunked progress updates only show engine state, not results.
+  - Stream results as engines complete: render the merged list incrementally
+    into the existing chunked response, re-sorting/re-deduping as new engines
+    land (needs a stable way to update already-sent html, e.g. replacing the
+    result list per chunk or appending with client-side ordering).
+  - Or render a first page from whatever finished within a short deadline
+    (1-2s) and append the rest when they arrive; keep a per-engine grace period
+    so the slowest engine never blocks the first render.
+  - Measure first-result latency vs total time before/after (tracing timings),
+    and check how it interacts with the response cache fingerprint and the
+    stale/offline fallback.
+
 ### Follow-ups (smaller)
 
-- Static assets (`style.css`, themes, `script.js`, favicon) are served with only
-  a `Content-Type` header, so the browser re-fetches them and the stylesheet can
-  arrive after the html (visible flash of unstyled content). Add
-  `Cache-Control`/`ETag` to `static_route` (they only change with the binary),
-  and consider a version query/hash for cache busting.
+- Static asset caching (implemented, pending confirmation). `static_route` now
+  sends `Cache-Control: public, max-age=31536000, immutable`, and every asset
+  reference in the html (`style.css`, `script.js`, theme stylesheets, favicon,
+  the colorpicker script) carries a `?v=` version. The version is a hash of the
+  embedded asset contents (computed in `register_static_routes!`), so it busts
+  the cache whenever any asset changes, but not on unrelated rebuilds. Verified
+  in the container: header present, `style.css?v=b051c628ac343176` on every
+  page.
 - Move config to environment variables (`METASEARCH_*`, e.g.
   `METASEARCH_BIND`, `METASEARCH_DATABASE_PATH`, `METASEARCH_KIWIX_ENABLED`)
   since docker is the primary deployment; keep `config.toml` (and `CONFIG`) as
@@ -164,10 +184,14 @@ notes and the zimit design live in `HANDOFF.md`.
   `engines.*`, `cache.*`, `database.*`, `image_search.*`, `urls.*`) and a
   documented precedence order.
 - Put the version number at the bottom right of every page, visible but
-  inconspicuous. `span.version-info` already does this on the index page
-  (absolute, bottom/right) behind `ui.show_version_info`; move it into the
-  shared page layout so search and settings show it too, and make it quiet
-  (smaller, reduced opacity, `user-select: none`, hash-only on hover or similar).
+  inconspicuous (implemented, pending confirmation). `span.version-info` sits
+  in the shared layout (index, search and settings) via `web::version_info()`
+  and is always shown — there is no config toggle. Styling: fixed position,
+  small, 45% opacity, full opacity on hover, `user-select: none`. `build.rs`
+  now trims the git hash and reports `unknown` when git is unavailable, so
+  container builds show `Version 0.2.4` and local builds
+  `Version 0.2.4 (19b9675)` with a commit link (before, the container rendered
+  an empty hash link).
 - Split inline `#[cfg(test)] mod tests` blocks into their own files (e.g.
   `src/foo/tests.rs` or a `tests/` directory) once the modules settle, so test
   code doesn't bloat the source files.

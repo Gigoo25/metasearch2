@@ -52,6 +52,7 @@ fn render_beginning_of_html(search: &SearchQuery) -> String {
         @if search.config.ui.show_settings_link {
             a.settings-link href="/settings" { "Settings" }
         }
+        (super::version_info())
         div.main-container.{"search-" (search.tab.to_string())};
         main;
         (form_html)

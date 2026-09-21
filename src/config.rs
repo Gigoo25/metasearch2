@@ -18,7 +18,6 @@ impl Default for Config {
             api: false,
             ui: UiConfig {
                 show_engine_list_separator: false,
-                show_version_info: false,
                 site_name: "metasearch".to_string(),
                 show_settings_link: true,
                 stylesheet_url: "".to_string(),
@@ -295,7 +294,6 @@ impl Config {
 #[derive(Debug, Clone)]
 pub struct UiConfig {
     pub show_engine_list_separator: bool,
-    pub show_version_info: bool,
     /// Settings are always accessible anyways, this just controls whether the
     /// link to them in the index page is visible.
     pub show_settings_link: bool,
@@ -309,7 +307,6 @@ pub struct UiConfig {
 #[derive(Deserialize, Debug, Default)]
 pub struct PartialUiConfig {
     pub show_engine_list_separator: Option<bool>,
-    pub show_version_info: Option<bool>,
     pub show_settings_link: Option<bool>,
     pub show_autocomplete: Option<bool>,
 
@@ -324,7 +321,6 @@ impl UiConfig {
         self.show_engine_list_separator = partial
             .show_engine_list_separator
             .unwrap_or(self.show_engine_list_separator);
-        self.show_version_info = partial.show_version_info.unwrap_or(self.show_version_info);
         self.show_settings_link = partial
             .show_settings_link
             .unwrap_or(self.show_settings_link);

@@ -60,9 +60,16 @@ body {
   color: var(--link);
 }
 .version-info {
-  position: absolute;
-  bottom: 1em;
-  right: 1em;
+  position: fixed;
+  bottom: 0.5rem;
+  right: 0.75rem;
+  font-size: 0.7rem;
+  opacity: 0.45;
+  user-select: none;
+  transition: opacity 0.15s;
+}
+.version-info:hover {
+  opacity: 1;
 }
 
 .main-container {
