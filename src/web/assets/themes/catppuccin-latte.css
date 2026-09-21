@@ -1,4 +1,7 @@
 :root {
+  /* Catppuccin Latte (light) */
+  color-scheme: light;
+
   /* body background */
   --bg-1: #dce0e8;
   /* background of the content */
