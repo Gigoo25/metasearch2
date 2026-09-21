@@ -10,6 +10,7 @@ pub mod config;
 pub mod db;
 pub mod engines;
 pub mod parse;
+pub mod safe_search;
 pub mod urls;
 pub mod web;
 

@@ -57,6 +57,10 @@ options you may want to change are:
     requests to arbitrary URLs from your server.
   - engines.google.weight - the ranking score multiplier for an engine, you can
     modify this if you prefer the results from certain engines.
+  - safe_search - `off`, `moderate` or `strict` (also on the settings page).
+    Explicit results are filtered through engine safe-search parameters and a
+    local blocklist that also covers the local index, image results and the
+    image proxy.
 
 --------
 OFFLINE
@@ -109,7 +113,8 @@ metasearch keeps a local sqlite database (`[database]`, by default
   - Site rules: raise, lower or hide a domain from the "ranking" menu under
     each search result. Rules are subdomain-aware score multipliers, listed
     on the settings page, where individual rules can be undone (that also
-    un-hides a domain) or cleared. Theme and custom CSS live there too.
+    un-hides a domain) or cleared. Theme, custom CSS and safe search live there
+    too.
   - The personal index: every result of a search is recorded and can be
     searched again later through the `index` engine, even when the network is
     down. `[database] max_results` and `max_age_days` bound the index; the

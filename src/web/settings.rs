@@ -6,7 +6,7 @@ use axum::{
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use serde::{Deserialize, Serialize};
 
-use crate::{config::Config, web::head_html};
+use crate::{config::Config, safe_search::SafeSearch, web::head_html};
 
 pub async fn get(Extension(config): Extension<Config>) -> impl IntoResponse {
     let theme_option = |value: &str, name: &str| -> Markup {
@@ -52,6 +52,15 @@ pub async fn get(Extension(config): Extension<Config>) -> impl IntoResponse {
                                     { (config.ui.stylesheet_str) }
                                 }
                             }
+
+                            h2 { "Search" }
+                            label for="safe-search" { "Safe search" }
+                            select #safe-search name="safe-search" {
+                                option value="off" selected[config.safe_search == SafeSearch::Off] { "Off" }
+                                option value="moderate" selected[config.safe_search == SafeSearch::Moderate] { "Moderate" }
+                                option value="strict" selected[config.safe_search == SafeSearch::Strict] { "Strict" }
+                            }
+                            p { "Applies to engine requests and to results from every engine, including the local index." }
                         }
 
                         div.ranking {
@@ -110,6 +119,8 @@ pub struct Settings {
     pub stylesheet_url: String,
     #[serde(default)]
     pub stylesheet_str: String,
+    #[serde(default)]
+    pub safe_search: SafeSearch,
 }
 
 #[derive(Deserialize)]

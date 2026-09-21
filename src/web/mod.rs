@@ -140,6 +140,7 @@ async fn config_middleware(
         if let Ok(settings) = serde_json::from_str::<settings::Settings>(&settings_json) {
             config.ui.stylesheet_url = settings.stylesheet_url;
             config.ui.stylesheet_str = settings.stylesheet_str;
+            config.safe_search = settings.safe_search;
         }
     }
 

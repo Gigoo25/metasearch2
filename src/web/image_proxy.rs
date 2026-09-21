@@ -25,6 +25,10 @@ pub async fn route(
         return (StatusCode::BAD_REQUEST, "Missing `url` parameter").into_response();
     }
 
+    if crate::safe_search::blocked(config.safe_search, &url, "", "") {
+        return (StatusCode::FORBIDDEN, "Blocked by safe search").into_response();
+    }
+
     // ssrf protection. i sure hope this is good enough!
     let Ok(v) = url_jail::validate(&url, url_jail::Policy::PublicOnly).await else {
         return (StatusCode::BAD_REQUEST, "Invalid URL").into_response();

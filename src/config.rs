@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::engines::Engine;
+use crate::{engines::Engine, safe_search::SafeSearch};
 
 impl Default for Config {
     fn default() -> Self {
@@ -50,6 +50,7 @@ impl Default for Config {
             },
             database: DatabaseConfig::default(),
             site_rules: vec![],
+            safe_search: SafeSearch::Off,
         }
     }
 }
@@ -177,6 +178,9 @@ pub struct Config {
     pub urls: UrlsConfig,
     /// Site rules loaded from the database, not the config file.
     pub site_rules: Vec<SiteRule>,
+    /// Default safe search level from the config file; the settings page can
+    /// override it at runtime.
+    pub safe_search: SafeSearch,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -266,6 +270,7 @@ pub struct PartialConfig {
     pub database: Option<PartialDatabaseConfig>,
     pub engines: Option<PartialEnginesConfig>,
     pub urls: Option<PartialUrlsConfig>,
+    pub safe_search: Option<SafeSearch>,
 }
 
 impl Config {
@@ -283,6 +288,7 @@ impl Config {
             self.engines = Arc::new(engines);
         }
         self.urls.overlay(partial.urls.unwrap_or_default());
+        self.safe_search = partial.safe_search.unwrap_or(self.safe_search);
     }
 }
 

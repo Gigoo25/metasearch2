@@ -4,6 +4,7 @@ use url::Url;
 
 use crate::{
     config::Config,
+    safe_search,
     urls::{apply_url_replacements, get_url_weight},
 };
 
@@ -33,6 +34,17 @@ pub fn merge_engine_responses(
 
             // apply url config here
             search_result.url = apply_url_replacements(&search_result.url, &config.urls);
+
+            // safe search: explicit results are dropped before they are ranked
+            if safe_search::blocked(
+                config.safe_search,
+                &search_result.url,
+                &search_result.title,
+                &search_result.description,
+            ) {
+                continue;
+            }
+
             let url_weight = get_url_weight(&search_result.url, &config.urls);
             if url_weight <= 0. {
                 continue;
@@ -91,6 +103,14 @@ pub fn merge_engine_responses(
             // url config applies to featured snippets too
             engine_featured_snippet.url =
                 apply_url_replacements(&engine_featured_snippet.url, &config.urls);
+            if safe_search::blocked(
+                config.safe_search,
+                &engine_featured_snippet.url,
+                &engine_featured_snippet.title,
+                &engine_featured_snippet.description,
+            ) {
+                continue;
+            }
             let url_weight = get_url_weight(&engine_featured_snippet.url, &config.urls);
             if url_weight <= 0. {
                 continue;
@@ -322,6 +342,16 @@ pub fn merge_images_responses(
         let engine_config = config.engines.get(engine);
 
         for (result_index, image_result) in response.image_results.into_iter().enumerate() {
+            // safe search applies to image results too
+            if safe_search::blocked(
+                config.safe_search,
+                &image_result.image_url,
+                &image_result.title,
+                "",
+            ) {
+                continue;
+            }
+
             // position 1 has a score of 1, position 2 has a score of 0.5, position 3 has a
             // score of 0.33, etc.
             let base_result_score = 1. / (result_index + 1) as f64;

@@ -1,14 +1,23 @@
 use url::Url;
 
 use crate::{
-    engines::{EngineResponse, RequestResponse, CLIENT},
+    engines::{EngineResponse, RequestResponse, SearchQuery, CLIENT},
     parse::{parse_html_response_with_opts, ParseOpts, QueryMethod},
+    safe_search::SafeSearch,
 };
 
-pub async fn request(query: &str) -> RequestResponse {
+pub async fn request(query: &SearchQuery) -> RequestResponse {
     CLIENT
-        .get(Url::parse_with_params("https://html.duckduckgo.com/html/", &[("q", query)]).unwrap())
+        .get(search_url(&query.query, query.config.safe_search))
         .into()
+}
+
+fn search_url(query: &str, safe_search: SafeSearch) -> Url {
+    Url::parse_with_params(
+        "https://html.duckduckgo.com/html/",
+        &[("q", query), ("kp", safe_search.duckduckgo())],
+    )
+    .unwrap()
 }
 
 pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
@@ -56,6 +65,19 @@ fn clean_url(href: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_search_is_sent_to_duckduckgo() {
+        let params = |safe_search| {
+            search_url("q", safe_search)
+                .query_pairs()
+                .find(|(key, _)| key == "kp")
+                .map(|(_, value)| value.into_owned())
+        };
+        assert_eq!(params(SafeSearch::Off), Some("-2".to_string()));
+        assert_eq!(params(SafeSearch::Moderate), Some("-1".to_string()));
+        assert_eq!(params(SafeSearch::Strict), Some("1".to_string()));
+    }
 
     const BODY: &str = r#"<html><body>
         <div class="result results_links web-result">

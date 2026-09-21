@@ -67,6 +67,8 @@ pub fn config_fingerprint(config: &Config) -> u64 {
 
     RANKING_VERSION.hash(&mut hasher);
 
+    config.safe_search.hash(&mut hasher);
+
     for rule in &config.site_rules {
         rule.host.hash(&mut hasher);
         rule.weight.to_bits().hash(&mut hasher);

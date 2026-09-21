@@ -6,18 +6,26 @@ use tracing::warn;
 use url::Url;
 
 use crate::{
-    engines::{EngineImageResult, EngineImagesResponse, EngineResponse, CLIENT},
+    engines::{EngineImageResult, EngineImagesResponse, EngineResponse, SearchQuery, CLIENT},
     parse::{parse_html_response_with_opts, ParseOpts, QueryMethod},
+    safe_search::SafeSearch,
 };
 
-pub async fn request(query: &str) -> wreq::RequestBuilder {
+pub async fn request(query: &SearchQuery) -> wreq::RequestBuilder {
     let cvid = generate_cvid();
-    let url = Url::parse_with_params(
+    let url = search_url(&query.query, query.config.safe_search, &cvid);
+    CLIENT
+        .get(url)
+        .header("Cookie", &format!("SRCHHPGUSR=IG={}", cvid))
+}
+
+fn search_url(query: &str, safe_search: SafeSearch, cvid: &str) -> Url {
+    Url::parse_with_params(
         "https://www.bing.com/search",
         &[
             ("q", query),
             ("pq", query),
-            ("cvid", &cvid),
+            ("cvid", cvid),
             ("filters", "rcrse:\"1\""), // filters=rcrse:"1" makes it not try to autocorrect
             ("FORM", "PERE"),
             ("ghc", "1"),
@@ -25,12 +33,10 @@ pub async fn request(query: &str) -> wreq::RequestBuilder {
             ("qs", "n"),
             ("sk", ""),
             ("sp", "-1"),
+            ("adlt", safe_search.bing()),
         ],
     )
-    .unwrap();
-    CLIENT
-        .get(url)
-        .header("Cookie", &format!("SRCHHPGUSR=IG={}", cvid))
+    .unwrap()
 }
 
 fn generate_cvid() -> String {
@@ -85,19 +91,22 @@ pub fn parse_response(body: &str) -> eyre::Result<EngineResponse> {
     )
 }
 
-pub fn request_images(query: &str) -> wreq::RequestBuilder {
-    CLIENT.get(
-        Url::parse_with_params(
-            "https://www.bing.com/images/async",
-            &[
-                ("q", query),
-                ("async", "content"),
-                ("first", "1"),
-                ("count", "35"),
-            ],
-        )
-        .unwrap(),
+pub fn request_images(query: &SearchQuery) -> wreq::RequestBuilder {
+    CLIENT.get(images_url(&query.query, query.config.safe_search))
+}
+
+fn images_url(query: &str, safe_search: SafeSearch) -> Url {
+    Url::parse_with_params(
+        "https://www.bing.com/images/async",
+        &[
+            ("q", query),
+            ("async", "content"),
+            ("first", "1"),
+            ("count", "35"),
+            ("adlt", safe_search.bing()),
+        ],
     )
+    .unwrap()
 }
 
 #[tracing::instrument(skip(body))]
@@ -185,5 +194,31 @@ fn clean_url(url: &str) -> eyre::Result<String> {
         Ok(String::from_utf8_lossy(&u).to_string())
     } else {
         Ok(url.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn params(url: &Url) -> HashMap<String, String> {
+        url.query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn safe_search_is_sent_to_bing() {
+        let url = search_url("test query", SafeSearch::Strict, "cvid");
+        assert_eq!(params(&url).get("adlt").map(String::as_str), Some("strict"));
+        assert_eq!(
+            params(&url).get("q").map(String::as_str),
+            Some("test query")
+        );
+
+        let url = images_url("test query", SafeSearch::Moderate);
+        assert_eq!(params(&url).get("adlt").map(String::as_str), Some("demote"));
     }
 }

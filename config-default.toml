@@ -3,6 +3,8 @@
 
 bind = "0.0.0.0:28019"
 api = false
+# off | moderate | strict; also settable on the settings page
+# safe_search = "moderate"
 
 [ui]
 # engine_list_separator = true
@@ -12,6 +14,7 @@ api = false
 
 [image_search]
 # enabled = true
+# safe search also filters image results and the image proxy
 
 [engines]
 # numbat = false
